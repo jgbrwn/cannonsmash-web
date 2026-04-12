@@ -312,3 +312,66 @@ export function solveTargetToVS(
 export function findTableBounce(path: BallState[]): BallState | undefined {
   return path.find((p, i) => i > 0 && Math.abs(p.z - TABLE.height) < 0.03 && Math.abs(p.x) <= TABLE.width / 2 && Math.abs(p.y) <= TABLE.length / 2)
 }
+
+export type PlayerSide = 1 | -1
+export type SwingState = 'idle' | 'backswing' | 'impact' | 'recovery'
+
+export interface PlayerState {
+  side: PlayerSide
+  x: number
+  y: number
+  z: number
+  targetX: number
+  targetY: number
+  swingTimer: number
+  swingState: SwingState
+  requestedShot: ShotSolution | null
+  lastImpactTimer: number | null
+}
+
+export function createPlayer(side: PlayerSide): PlayerState {
+  return {
+    side,
+    x: 0,
+    y: side > 0 ? -TABLE.length / 2 - 0.22 : TABLE.length / 2 + 0.22,
+    z: 1.05,
+    targetX: 0,
+    targetY: TABLE.length / 4 * side,
+    swingTimer: 0,
+    swingState: 'idle',
+    requestedShot: null,
+    lastImpactTimer: null,
+  }
+}
+
+export function startSwing(player: PlayerState, shot: ShotSolution): PlayerState {
+  if (player.swingState !== 'idle') return player
+  return {
+    ...player,
+    swingTimer: 1,
+    swingState: 'backswing',
+    requestedShot: shot,
+    lastImpactTimer: null,
+  }
+}
+
+export function stepPlayer(player: PlayerState): PlayerState {
+  if (player.swingState === 'idle') return player
+
+  const timer = player.swingTimer + 1
+  if (timer === 20) {
+    return { ...player, swingTimer: timer, swingState: 'impact', lastImpactTimer: timer }
+  }
+  if (timer >= 50) {
+    return { ...player, swingTimer: 0, swingState: 'idle', requestedShot: null, lastImpactTimer: null }
+  }
+  return { ...player, swingTimer: timer, swingState: timer < 20 ? 'backswing' : 'recovery' }
+}
+
+export function consumeImpact(player: PlayerState): { player: PlayerState; shot: ShotSolution | null } {
+  if (player.swingState !== 'impact' || !player.requestedShot) return { player, shot: null }
+  return {
+    player: { ...player, swingState: 'recovery', lastImpactTimer: null },
+    shot: player.requestedShot,
+  }
+}
