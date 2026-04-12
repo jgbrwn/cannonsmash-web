@@ -351,6 +351,9 @@ export interface ContactMetrics {
   distance: number
   timingError: number
   reachable: boolean
+  contactX: number
+  contactY: number
+  contactZ: number
 }
 
 export interface ContactPointPrediction {
@@ -396,6 +399,8 @@ const PLAYER_HOME_Y = TABLE.length / 2 + 0.22
 const CONTACT_FORWARD = 0.22
 const CONTACT_LATERAL = 0.18
 const CONTACT_HEIGHT = 0.16
+const STANCE_OFFSET_X = 0.1
+const STANCE_SWING_Y = 0.03
 
 export const ARCHETYPES: Record<PlayerArchetype, ArchetypeProfile> = {
   PenAttack: {
@@ -473,13 +478,23 @@ export function createPlayer(side: PlayerSide, archetype: PlayerArchetype = 'Pen
   }
 }
 
-export function setPlayerTarget(player: PlayerState, targetX: number, targetY: number): PlayerState {
+export function getPlayerStanceOffset(player: PlayerState, hand: HandSide = player.plannedHand): { x: number; y: number } {
+  const stanceX = hand === 'forehand' ? STANCE_OFFSET_X : -STANCE_OFFSET_X * 0.75
+  const stanceY = hand === 'forehand' ? STANCE_SWING_Y : -STANCE_SWING_Y
+  return {
+    x: player.side * stanceX,
+    y: player.side * stanceY,
+  }
+}
+
+export function setPlayerTarget(player: PlayerState, targetX: number, targetY: number, hand: HandSide = player.plannedHand): PlayerState {
+  const stance = getPlayerStanceOffset(player, hand)
   return {
     ...player,
-    targetX: clamp(targetX, -TABLE.width / 2 - 0.55, TABLE.width / 2 + 0.55),
+    targetX: clamp(targetX - stance.x, -TABLE.width / 2 - 0.55, TABLE.width / 2 + 0.55),
     targetY: player.side > 0
-      ? clamp(targetY, -TABLE.length / 2 - 0.75, -0.08)
-      : clamp(targetY, 0.08, TABLE.length / 2 + 0.75),
+      ? clamp(targetY - stance.y, -TABLE.length / 2 - 0.75, -0.08)
+      : clamp(targetY - stance.y, 0.08, TABLE.length / 2 + 0.75),
   }
 }
 
@@ -541,16 +556,18 @@ export function stepPlayer(player: PlayerState): PlayerState {
 
 export function getPlayerContactMetrics(player: PlayerState, ball: BallState): ContactMetrics {
   const profile = getArchetypeProfile(player)
-  const rx = player.x + player.side * CONTACT_LATERAL
-  const ry = player.y + player.side * CONTACT_FORWARD
-  const rz = player.z + CONTACT_HEIGHT
+  const stance = getPlayerStanceOffset(player)
+  const handReach = player.plannedHand === 'forehand' ? 1 : 0.92
+  const rx = player.x + player.side * CONTACT_LATERAL + stance.x
+  const ry = player.y + player.side * CONTACT_FORWARD + stance.y
+  const rz = player.z + CONTACT_HEIGHT + (player.plannedFamily === 'attack' ? 0.03 : player.plannedFamily === 'cut' ? -0.02 : 0)
   const dx = ball.x - rx
   const dy = ball.y - ry
   const dz = ball.z - rz
   const distance = Math.hypot(dx, dy, dz)
   const timingError = player.side * dy
-  const reachable = Math.abs(dx) <= profile.reachX && Math.abs(dy) <= profile.reachY && Math.abs(dz) <= profile.reachZ && distance <= profile.contactRadius
-  return { dx, dy, dz, distance, timingError, reachable }
+  const reachable = Math.abs(dx) <= profile.reachX * handReach && Math.abs(dy) <= profile.reachY && Math.abs(dz) <= profile.reachZ && distance <= profile.contactRadius * handReach
+  return { dx, dy, dz, distance, timingError, reachable, contactX: rx, contactY: ry, contactZ: rz }
 }
 
 export function getHandSideForBall(player: PlayerState, ball: BallState): HandSide {
@@ -658,8 +675,10 @@ export function isBallHittableForSide(ball: BallState, side: PlayerSide): boolea
   return (side === 1 && ball.status === 3) || (side === -1 && ball.status === 1)
 }
 
-export function predictContactPoint(ball: BallState, side: PlayerSide, maxSteps = 180): ContactPointPrediction | null {
+export function predictContactPoint(ball: BallState, side: PlayerSide, maxSteps = 180, hand: HandSide = 'forehand'): ContactPointPrediction | null {
   let cur = cloneBall(ball)
+  const dummyPlayer = createPlayer(side)
+  dummyPlayer.plannedHand = hand
   for (let i = 0; i < maxSteps; i++) {
     if (
       ((side === 1 && cur.y <= 0) || (side === -1 && cur.y >= 0)) &&
@@ -667,11 +686,12 @@ export function predictContactPoint(ball: BallState, side: PlayerSide, maxSteps 
       cur.z <= 1.52 &&
       cur.status >= 0
     ) {
+      const stance = getPlayerStanceOffset(dummyPlayer, hand)
       return {
         ball: cur,
         etaTicks: i,
-        playerX: clamp(cur.x - side * CONTACT_LATERAL, -TABLE.width / 2 - 0.45, TABLE.width / 2 + 0.45),
-        playerY: clamp(cur.y - side * CONTACT_FORWARD, side > 0 ? -TABLE.length / 2 - 0.72 : 0.08, side > 0 ? -0.08 : TABLE.length / 2 + 0.72),
+        playerX: clamp(cur.x - side * CONTACT_LATERAL - stance.x, -TABLE.width / 2 - 0.45, TABLE.width / 2 + 0.45),
+        playerY: clamp(cur.y - side * CONTACT_FORWARD - stance.y, side > 0 ? -TABLE.length / 2 - 0.72 : 0.08, side > 0 ? -0.08 : TABLE.length / 2 + 0.72),
       }
     }
     cur = stepBall(cur)
@@ -681,7 +701,8 @@ export function predictContactPoint(ball: BallState, side: PlayerSide, maxSteps 
 }
 
 export function pickAIMoveTarget(player: PlayerState, ball: BallState): ContactPointPrediction | null {
-  const prediction = predictContactPoint(ball, player.side)
+  const hand = getHandSideForBall(player, ball)
+  const prediction = predictContactPoint(ball, player.side, 180, hand)
   if (!prediction) return null
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)

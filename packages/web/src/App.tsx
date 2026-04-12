@@ -11,7 +11,9 @@ import {
   createNeutralBallForSide,
   createPlayer,
   findTableBounce,
+  getHandSideForBall,
   getPlayerContactMetrics,
+  getPlayerStanceOffset,
   getStatusRatio,
   isBallHittableForSide,
   pickAIMoveTarget,
@@ -78,8 +80,9 @@ export default function App() {
   const predicted = useMemo(() => sampleTrajectory(ball, 260), [ball])
   const landing = useMemo(() => findTableBounce(predicted), [predicted])
   const playerContact = useMemo(() => getPlayerContactMetrics(player, ball), [player, ball])
-  const contactPrediction = useMemo(() => predictContactPoint(ball, 1), [ball])
-  const opponentPrediction = useMemo(() => predictContactPoint(ball, -1), [ball])
+  const playerHand = useMemo(() => getHandSideForBall(player, ball), [player, ball])
+  const contactPrediction = useMemo(() => predictContactPoint(ball, 1, 180, playerHand), [ball, playerHand])
+  const opponentPrediction = useMemo(() => predictContactPoint(ball, -1, 180, getHandSideForBall(opponent, ball)), [ball, opponent])
   const playerStatusRatio = useMemo(() => getStatusRatio(player), [player])
   const oppStatusRatio = useMemo(() => getStatusRatio(opponent), [opponent])
 
@@ -110,10 +113,10 @@ export default function App() {
         const oppPlan = pickAIMoveTarget(nextOpponent, nextBall)
 
         if (!serveMode && playerPlan && nextPlayer.swingState === 'idle') {
-          nextPlayer = setPlayerTarget(nextPlayer, playerPlan.playerX, playerPlan.playerY)
+          nextPlayer = setPlayerTarget(nextPlayer, playerPlan.playerX, playerPlan.playerY, getHandSideForBall(nextPlayer, playerPlan.ball))
         }
         if (oppPlan) {
-          nextOpponent = setPlayerTarget(nextOpponent, oppPlan.playerX, oppPlan.playerY)
+          nextOpponent = setPlayerTarget(nextOpponent, oppPlan.playerX, oppPlan.playerY, getHandSideForBall(nextOpponent, oppPlan.ball))
         }
 
         if (isBallHittableForSide(nextBall, -1) && nextOpponent.swingState === 'idle') {
@@ -297,17 +300,26 @@ export default function App() {
       playerMesh.position.set(player.x, player.y, player.z)
       oppMesh.position.set(opponent.x, opponent.y, opponent.z)
 
+      const playerStance = getPlayerStanceOffset(player)
+      const oppStance = getPlayerStanceOffset(opponent)
       const swingPhase = player.swingState === 'backswing' ? -0.12 : player.swingState === 'impact' ? 0.22 : player.swingState === 'recovery' ? 0.12 : 0.02
-      racket.position.set(player.x + 0.18 + swingPhase, player.y + 0.22, player.z + 0.16)
-      racket.rotation.y = -Math.PI / 5
-      playerReach.position.set(player.x + 0.18, player.y + 0.22, TABLE.height + 0.004)
+      racket.position.set(playerContact.contactX + swingPhase * player.side, playerContact.contactY, playerContact.contactZ)
+      racket.rotation.y = player.plannedHand === 'forehand' ? -Math.PI / 5 : Math.PI / 7
+      playerReach.position.set(playerContact.contactX, playerContact.contactY, TABLE.height + 0.004)
       playerReach.scale.setScalar(ARCHETYPES[player.archetype].contactRadius / 0.38)
+      playerMesh.rotation.z = player.plannedHand === 'forehand' ? -0.08 : 0.08
+      playerMesh.position.x = player.x + playerStance.x * 0.35
+      playerMesh.position.y = player.y + playerStance.y * 0.35
 
       const oppSwingPhase = opponent.swingState === 'backswing' ? 0.12 : opponent.swingState === 'impact' ? -0.22 : opponent.swingState === 'recovery' ? -0.12 : -0.02
-      oppRacket.position.set(opponent.x - 0.18 + oppSwingPhase, opponent.y - 0.22, opponent.z + 0.16)
-      oppRacket.rotation.y = Math.PI / 5
-      oppReach.position.set(opponent.x - 0.18, opponent.y - 0.22, TABLE.height + 0.004)
+      const oppContact = getPlayerContactMetrics(opponent, ball)
+      oppRacket.position.set(oppContact.contactX + oppSwingPhase * opponent.side, oppContact.contactY, oppContact.contactZ)
+      oppRacket.rotation.y = opponent.plannedHand === 'forehand' ? Math.PI / 5 : -Math.PI / 7
+      oppReach.position.set(oppContact.contactX, oppContact.contactY, TABLE.height + 0.004)
       oppReach.scale.setScalar(ARCHETYPES[opponent.archetype].contactRadius / 0.38)
+      oppMesh.rotation.z = opponent.plannedHand === 'forehand' ? 0.08 : -0.08
+      oppMesh.position.x = opponent.x + oppStance.x * 0.35
+      oppMesh.position.y = opponent.y + oppStance.y * 0.35
 
       targetRing.position.set(target.x, target.y, TABLE.height + 0.004)
       trajGeom.setFromPoints(predicted.map((p) => new THREE.Vector3(p.x, p.y, p.z)))
@@ -395,7 +407,7 @@ export default function App() {
           <div>ball status: {ball.status}</div>
           <div>you: {player.archetype} · status {(playerStatusRatio * 100).toFixed(0)}%</div>
           <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
-          <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)}</div>
+          <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
           <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
@@ -446,7 +458,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Stroke planning now distinguishes forehand/backhand and attack/drive/cut/block tendencies. Archetypes and ball context influence both the player stroke plan and the opponent's simulated return choices.
+            Positioning and reach are now stance-aware: forehand/backhand planning shifts body setup, target staging, racket contact offsets, and visible reach placement before impact.
           </div>
         </div>
       </div>
