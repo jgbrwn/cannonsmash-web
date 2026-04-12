@@ -5,10 +5,10 @@ import {
   TICK,
   ARCHETYPES,
   applyShot,
+  chooseAIReturnShot,
   createIdleBall,
   createNeutralBallForSide,
   createPlayer,
-  createSimpleReturnShot,
   findTableBounce,
   getPlayerContactMetrics,
   getStatusRatio,
@@ -38,6 +38,7 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
+  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean } | null>(null)
   const ballRef = useRef<BallState>(createIdleBall())
   const playerRef = useRef<PlayerState>(createPlayer(1, 'PenAttack'))
   const opponentRef = useRef<PlayerState>(createPlayer(-1, 'ShakeCut'))
@@ -99,6 +100,7 @@ export default function App() {
         nextBall = createIdleBall()
         nextPlayer = createPlayer(1, playerArchetype)
         nextOpponent = createPlayer(-1, oppArchetype)
+        aiPlanRef.current = null
         clearQueuedShot = true
       } else {
         const playerPlan = predictContactPoint(nextBall, 1)
@@ -111,12 +113,24 @@ export default function App() {
           nextOpponent = setPlayerTarget(nextOpponent, oppPlan.playerX, oppPlan.playerY)
         }
 
-        if (isBallHittableForSide(nextBall, -1) && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
-          const aiBall = { ...nextBall }
-          const aiShot = createSimpleReturnShot(aiBall, -1, nextOpponent.archetype, getStatusRatio(nextOpponent))
-          nextOpponent = startSwing(nextOpponent, aiShot)
-          aiCooldownRef.current = 65
-          nextMessage = 'Opponent moving into the ball...'
+        if (isBallHittableForSide(nextBall, -1) && nextOpponent.swingState === 'idle') {
+          if (!aiPlanRef.current) {
+            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall })
+            const planTicks = Math.max(1, (oppPlan?.etaTicks ?? 18) - 19)
+            aiPlanRef.current = { swingAt: planTicks, shot: choice.shot, attack: choice.attack }
+            nextMessage = choice.attack ? 'Opponent lines up an attack...' : 'Opponent reads the rally...'
+          }
+          if (aiPlanRef.current) {
+            aiPlanRef.current.swingAt -= 1
+            if (aiPlanRef.current.swingAt <= 0 && aiCooldownRef.current === 0) {
+              nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot)
+              aiCooldownRef.current = 65
+              nextMessage = aiPlanRef.current.attack ? 'Opponent commits late to an attack!' : 'Opponent commits late to the return.'
+              aiPlanRef.current = null
+            }
+          }
+        } else if (!isBallHittableForSide(nextBall, -1)) {
+          aiPlanRef.current = null
         }
 
         nextPlayer = stepPlayer(nextPlayer)
@@ -148,10 +162,12 @@ export default function App() {
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
             nextMessage = impact.quality > 0.72
-              ? 'Opponent returns cleanly.'
+              ? 'Opponent times the return cleanly.'
               : getStatusRatio(nextOpponent) < 0.3
                 ? 'Opponent lunges a tired return.'
                 : 'Opponent scrambles a return!'
+          } else {
+            aiPlanRef.current = null
           }
         }
       }
@@ -329,6 +345,7 @@ export default function App() {
     const idleBall = createIdleBall()
     const idlePlayer = createPlayer(1, playerArchetype)
     const idleOpponent = createPlayer(-1, oppArchetype)
+    aiPlanRef.current = null
     ballRef.current = idleBall
     playerRef.current = idlePlayer
     opponentRef.current = idleOpponent
@@ -407,6 +424,7 @@ export default function App() {
         {shotQueued && <div style={{ fontSize: 12, marginTop: 10, opacity: 0.9 }}>queued impact shot ready</div>}
         {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
         {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
+        {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s</div>}
         {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
       </div>
 
@@ -415,7 +433,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Status now drains from movement and swinging, recovers while settling, and feeds into contact quality. Archetypes now change reach, mobility, spin/power bias, and the opponent's return tendencies.
+            Opponent shot choice now samples multiple target solutions via forward simulation, scores them by archetype/status context, and delays swing commitment until just before impact to better match the original's late-decision feel.
           </div>
         </div>
       </div>

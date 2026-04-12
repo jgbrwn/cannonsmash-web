@@ -359,6 +359,14 @@ export interface ImpactResult {
   distance: number
 }
 
+export interface AITargetChoice {
+  shot: ShotSolution
+  score: number
+  targetX: number
+  targetY: number
+  attack: boolean
+}
+
 export interface ArchetypeProfile {
   name: PlayerArchetype
   moveSpeedX: number
@@ -644,4 +652,63 @@ export function createSimpleReturnShot(ball: BallState, side: PlayerSide, archet
   const spin = clamp((side > 0 ? 0.35 : 0.15) + profile.spinBias + (Math.random() * 2 - 1) * spread, -1.2, 1.2)
   const level = clamp(0.72 + profile.powerBias + Math.random() * 0.18 - (1 - statusRatio) * 0.16, 0.45, 1)
   return solveTargetToV(ball, targetX, targetY, level, spin)
+}
+
+function isAttackableBall(ball: BallState, side: PlayerSide): boolean {
+  return ball.z > TABLE.height + 0.34 && ((side === 1 && ball.y < -0.2) || (side === -1 && ball.y > 0.2))
+}
+
+function evaluateAIReturn(player: PlayerState, shot: ShotSolution, attack: boolean): number {
+  const profile = getArchetypeProfile(player)
+  const statusRatio = getStatusRatio(player)
+  const widthPressure = Math.abs(shot.targetX) / (TABLE.width / 2)
+  const depthPressure = Math.abs(shot.targetY) / (TABLE.length / 2)
+  const pace = shot.level
+  const spinValue = Math.abs(shot.spin)
+  let score = widthPressure * 0.55 + depthPressure * 0.45 + pace * 0.5 + spinValue * 0.16
+  if (attack) score += 0.22 + profile.powerBias * 0.6
+  else score += profile.spinBias > 0 ? 0.04 : 0.08
+  score += statusRatio * 0.18
+  score -= (1 - statusRatio) * (attack ? 0.26 : 0.08)
+  return score
+}
+
+export function chooseAIReturnShot(player: PlayerState, ball: BallState): AITargetChoice {
+  const side = player.side
+  const lane = side > 0 ? -1 : 1
+  const profile = getArchetypeProfile(player)
+  const statusRatio = getStatusRatio(player)
+  const attack = isAttackableBall(ball, side) && statusRatio > 0.28
+
+  let best: AITargetChoice | null = null
+  const xs = [-0.42, -0.22, 0, 0.22, 0.42].map((f) => f * (TABLE.width / 2))
+  const ys = attack
+    ? [0.28, 0.36, 0.43].map((f) => lane * TABLE.length * f)
+    : [0.18, 0.24, 0.31, 0.37].map((f) => lane * TABLE.length * f)
+  const spins = attack
+    ? [profile.spinBias + 0.05, profile.spinBias + 0.22]
+    : [profile.spinBias - 0.18, profile.spinBias + 0.02, profile.spinBias + 0.16]
+  const levels = attack
+    ? [0.76 + profile.powerBias, 0.86 + profile.powerBias]
+    : [0.6 + profile.powerBias * 0.5, 0.72 + profile.powerBias * 0.6]
+
+  for (const targetX of xs) {
+    for (const targetY of ys) {
+      for (const spin of spins) {
+        for (const level of levels) {
+          const shot = solveTargetToV(ball, targetX, targetY, clamp(level - (1 - statusRatio) * 0.14, 0.4, 1), clamp(spin, -1.2, 1.2))
+          const path = sampleTrajectory(applyShot(ball, shot), 200)
+          const bounce = findTableBounce(path)
+          if (!bounce) continue
+          const sameSide = side > 0 ? bounce.y < 0 : bounce.y > 0
+          if (sameSide) continue
+          const score = evaluateAIReturn(player, shot, attack)
+          if (!best || score > best.score) best = { shot, score, targetX, targetY, attack }
+        }
+      }
+    }
+  }
+
+  if (best) return best
+  return { shot: createSimpleReturnShot(ball, side, player.archetype, statusRatio), score: -1, targetX: 0, targetY: lane * TABLE.length * 0.24, attack: false }
 }
