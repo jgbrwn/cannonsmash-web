@@ -1,0 +1,9 @@
+{
+  "name": "cannonsmash-web",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "npm run dev -w @csmash/web",
+    "build": "npm run build -w @csmash/web"
+  }
+}
