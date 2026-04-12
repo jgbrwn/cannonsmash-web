@@ -375,3 +375,29 @@ export function consumeImpact(player: PlayerState): { player: PlayerState; shot:
     shot: player.requestedShot,
   }
 }
+
+export function isBallHittableForSide(ball: BallState, side: PlayerSide): boolean {
+  return (side === 1 && ball.status === 3) || (side === -1 && ball.status === 1)
+}
+
+export function createNeutralBallForSide(side: PlayerSide): BallState {
+  return {
+    x: side > 0 ? 0.3 : -0.3,
+    y: side > 0 ? -TABLE.length / 2 + 0.06 : TABLE.length / 2 - 0.06,
+    z: TABLE.height + 0.32,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    spin: 0,
+    status: side > 0 ? 3 : 1,
+  }
+}
+
+export function createSimpleReturnShot(ball: BallState, side: PlayerSide): ShotSolution {
+  const lane = side > 0 ? -1 : 1
+  const targetX = (Math.random() * 0.7 - 0.35) * TABLE.width
+  const targetY = lane * (TABLE.length * (0.22 + Math.random() * 0.18))
+  const spin = side > 0 ? 0.35 : -0.2 + Math.random() * 0.8
+  const level = 0.72 + Math.random() * 0.18
+  return solveTargetToV(ball, targetX, targetY, level, spin)
+}

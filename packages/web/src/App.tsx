@@ -6,8 +6,11 @@ import {
   applyShot,
   consumeImpact,
   createIdleBall,
+  createNeutralBallForSide,
   createPlayer,
+  createSimpleReturnShot,
   findTableBounce,
+  isBallHittableForSide,
   sampleTrajectory,
   solveTargetToV,
   solveTargetToVS,
@@ -27,9 +30,11 @@ type Vec2 = { x: number; y: number }
 export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
+  const aiCooldownRef = useRef(0)
 
   const [ball, setBall] = useState<BallState>(() => createIdleBall())
   const [player, setPlayer] = useState<PlayerState>(() => createPlayer(1))
+  const [opponent, setOpponent] = useState<PlayerState>(() => createPlayer(-1))
   const [running, setRunning] = useState(true)
   const [target, setTarget] = useState<Vec2>({ x: 0, y: TABLE.length / 4 })
   const [spin, setSpin] = useState(0.35)
@@ -37,6 +42,8 @@ export default function App() {
   const [serveMode, setServeMode] = useState(false)
   const [lastShot, setLastShot] = useState<ShotSolution | null>(null)
   const [shotQueued, setShotQueued] = useState<ShotSolution | null>(null)
+  const [score, setScore] = useState({ you: 0, opp: 0 })
+  const [message, setMessage] = useState('Aim, then hold/release to swing.')
 
   const predicted = useMemo(() => sampleTrajectory(ball, 260), [ball])
   const landing = useMemo(() => findTableBounce(predicted), [predicted])
@@ -44,6 +51,8 @@ export default function App() {
   useEffect(() => {
     if (!running) return
     const id = setInterval(() => {
+      aiCooldownRef.current = Math.max(0, aiCooldownRef.current - 1)
+
       setPlayer((prev) => {
         let next = stepPlayer(prev)
         const impact = consumeImpact(next)
@@ -55,7 +64,50 @@ export default function App() {
         }
         return next
       })
-      setBall((prev) => stepBall(prev))
+
+      setOpponent((prev) => {
+        let next = stepPlayer(prev)
+        const impact = consumeImpact(next)
+        next = impact.player
+        if (impact.shot) {
+          setBall((prevBall) => applyShot(prevBall, impact.shot!))
+          setMessage('Opponent returns!')
+        }
+        return next
+      })
+
+      setBall((prev) => {
+        const next = stepBall(prev)
+
+        if (next.status < 0 && prev.status >= 0) {
+          const oppWon = prev.status === 3 || prev.status === 4 || prev.status === 6
+          setScore((s) => oppWon ? { ...s, opp: s.opp + 1 } : { ...s, you: s.you + 1 })
+          setMessage(oppWon ? 'Point to opponent.' : 'Point to you.')
+          aiCooldownRef.current = 0
+          setShotQueued(null)
+          setPlayer(createPlayer(1))
+          setOpponent(createPlayer(-1))
+          return createIdleBall()
+        }
+
+        if (isBallHittableForSide(next, -1) && aiCooldownRef.current === 0) {
+          const aiBall = createNeutralBallForSide(-1)
+          aiBall.x = next.x
+          aiBall.y = next.y
+          aiBall.z = next.z
+          aiBall.vx = next.vx
+          aiBall.vy = next.vy
+          aiBall.vz = next.vz
+          aiBall.spin = next.spin
+          aiBall.status = next.status
+          const aiShot = createSimpleReturnShot(aiBall, -1)
+          setOpponent((prevOpp) => startSwing(prevOpp, aiShot))
+          aiCooldownRef.current = 65
+          setMessage('Opponent preparing a return...')
+        }
+
+        return next
+      })
     }, TICK * 1000)
     return () => clearInterval(id)
   }, [running])
@@ -77,8 +129,7 @@ export default function App() {
     renderer.setSize(el.clientWidth, el.clientHeight)
     el.appendChild(renderer.domElement)
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 1.1)
-    scene.add(hemi)
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.1))
     const dir = new THREE.DirectionalLight(0xffffff, 1.1)
     dir.position.set(3, -4, 6)
     scene.add(dir)
@@ -104,35 +155,24 @@ export default function App() {
       new THREE.Vector3(0, TABLE.length / 2, TABLE.height + 0.002),
     ]), lineMat))
 
-    const net = new THREE.Mesh(
-      new THREE.BoxGeometry(TABLE.width, 0.02, TABLE.netHeight),
-      new THREE.MeshPhongMaterial({ color: 0xe8e8e8, transparent: true, opacity: 0.85 })
-    )
+    const net = new THREE.Mesh(new THREE.BoxGeometry(TABLE.width, 0.02, TABLE.netHeight), new THREE.MeshPhongMaterial({ color: 0xe8e8e8, transparent: true, opacity: 0.85 }))
     net.position.set(0, 0, TABLE.height + TABLE.netHeight / 2)
     scene.add(net)
 
-    const ballMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(TABLE.ballRadius, 24, 24),
-      new THREE.MeshStandardMaterial({ color: 0xffc62b, emissive: 0x442200 })
-    )
+    const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(TABLE.ballRadius, 24, 24), new THREE.MeshStandardMaterial({ color: 0xffc62b, emissive: 0x442200 }))
     scene.add(ballMesh)
 
-    const playerMesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.11, 0.6, 6, 12),
-      new THREE.MeshPhongMaterial({ color: 0x98c1ff })
-    )
+    const playerMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0x98c1ff }))
+    const oppMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0xffc7b0 }))
     scene.add(playerMesh)
+    scene.add(oppMesh)
 
-    const racket = new THREE.Mesh(
-      new THREE.CircleGeometry(0.12, 24),
-      new THREE.MeshPhongMaterial({ color: 0xff8f70 })
-    )
+    const racket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xff8f70 }))
+    const oppRacket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xffd46d }))
     scene.add(racket)
+    scene.add(oppRacket)
 
-    const shadow = new THREE.Mesh(
-      new THREE.CircleGeometry(TABLE.ballRadius * 1.4, 24),
-      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22 })
-    )
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(TABLE.ballRadius * 1.4, 24), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22 }))
     shadow.rotation.x = -Math.PI / 2
     scene.add(shadow)
 
@@ -140,17 +180,11 @@ export default function App() {
     const trajLine = new THREE.Line(trajGeom, new THREE.LineBasicMaterial({ color: 0xff6b6b }))
     scene.add(trajLine)
 
-    const targetRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.09, 0.12, 32),
-      new THREE.MeshBasicMaterial({ color: 0x7ed7ff, side: THREE.DoubleSide })
-    )
+    const targetRing = new THREE.Mesh(new THREE.RingGeometry(0.09, 0.12, 32), new THREE.MeshBasicMaterial({ color: 0x7ed7ff, side: THREE.DoubleSide }))
     targetRing.rotation.x = -Math.PI / 2
     scene.add(targetRing)
 
-    const landingRing = new THREE.Mesh(
-      new THREE.RingGeometry(0.07, 0.1, 32),
-      new THREE.MeshBasicMaterial({ color: 0xff6b6b, side: THREE.DoubleSide })
-    )
+    const landingRing = new THREE.Mesh(new THREE.RingGeometry(0.07, 0.1, 32), new THREE.MeshBasicMaterial({ color: 0xff6b6b, side: THREE.DoubleSide }))
     landingRing.rotation.x = -Math.PI / 2
     scene.add(landingRing)
 
@@ -168,11 +202,17 @@ export default function App() {
       shadow.scale.setScalar(1 + Math.max(0, ball.z - TABLE.height) * 0.35)
 
       playerMesh.position.set(player.x, player.y, player.z)
+      oppMesh.position.set(opponent.x, opponent.y, opponent.z)
+
       const swingPhase = player.swingState === 'backswing' ? -0.12 : player.swingState === 'impact' ? 0.22 : player.swingState === 'recovery' ? 0.12 : 0.02
       racket.position.set(player.x + 0.18 + swingPhase, player.y + 0.02, player.z + 0.16)
       racket.rotation.y = -Math.PI / 5
-      targetRing.position.set(target.x, target.y, TABLE.height + 0.004)
 
+      const oppSwingPhase = opponent.swingState === 'backswing' ? 0.12 : opponent.swingState === 'impact' ? -0.22 : opponent.swingState === 'recovery' ? -0.12 : -0.02
+      oppRacket.position.set(opponent.x - 0.18 + oppSwingPhase, opponent.y - 0.02, opponent.z + 0.16)
+      oppRacket.rotation.y = Math.PI / 5
+
+      targetRing.position.set(target.x, target.y, TABLE.height + 0.004)
       trajGeom.setFromPoints(predicted.map((p) => new THREE.Vector3(p.x, p.y, p.z)))
       if (landing) {
         landingRing.visible = true
@@ -192,22 +232,35 @@ export default function App() {
       renderer.dispose()
       el.removeChild(renderer.domElement)
     }
-  }, [ball, predicted, landing, target, player])
+  }, [ball, predicted, landing, target, player, opponent])
 
   const queueShot = (nextLevel = level) => {
+    if (!serveMode && !isBallHittableForSide(ball, 1) && ball.status !== 8) {
+      setMessage('Ball not in your hittable window yet.')
+      return
+    }
+
+    const baseBall = serveMode
+      ? tossForServe(1)
+      : ball.status === 8 ? createNeutralBallForSide(1) : { ...ball }
+
     const shot = serveMode
-      ? solveTargetToVS(tossForServe(1), target.x, target.y, nextLevel, spin)
-      : solveTargetToV({ x: 0.3, y: -TABLE.length / 2 + 0.06, z: TABLE.height + 0.32, vx: 0, vy: 0, vz: 0, spin, status: 0 }, target.x, target.y, nextLevel, spin)
+      ? solveTargetToVS(baseBall, target.x, target.y, nextLevel, spin)
+      : solveTargetToV(baseBall, target.x, target.y, nextLevel, spin)
+
     setShotQueued(shot)
     setPlayer((prev) => startSwing(prev, shot))
-    setBall(serveMode ? tossForServe(1) : { x: 0.3, y: -TABLE.length / 2 + 0.06, z: TABLE.height + 0.32, vx: 0, vy: 0, vz: 0, spin, status: 3 })
+    setBall(baseBall)
+    setMessage(serveMode ? 'Serve swing started.' : 'Swing started.')
   }
 
   const resetIdle = () => {
     setBall(createIdleBall())
     setPlayer(createPlayer(1))
+    setOpponent(createPlayer(-1))
     setLastShot(null)
     setShotQueued(null)
+    setMessage('Reset.')
   }
 
   const pointerDownSwing = () => {
@@ -228,18 +281,18 @@ export default function App() {
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
 
       <div style={{ position: 'absolute', top: 16, left: 16, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12, minWidth: 290 }}>
-        <div style={{ fontWeight: 700, marginBottom: 6 }}>Cannon Smash Swing Sandbox</div>
-        <div style={{ fontSize: 13, opacity: 0.9 }}>Shots now execute through a timed swing state.</div>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Cannon Smash Rally Prototype</div>
+        <div style={{ fontSize: 13, opacity: 0.9 }}>Swing timing + opponent return + point reset.</div>
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
-          <div>ball: ({ball.x.toFixed(2)}, {ball.y.toFixed(2)}, {ball.z.toFixed(2)})</div>
-          <div>vel: ({ball.vx.toFixed(2)}, {ball.vy.toFixed(2)}, {ball.vz.toFixed(2)})</div>
-          <div>player swing: {player.swingState} @ {player.swingTimer}</div>
-          <div>spin: {spin.toFixed(2)} | level: {level.toFixed(2)}</div>
-          {landing && <div>predicted bounce: ({landing.x.toFixed(2)}, {landing.y.toFixed(2)})</div>}
+          <div>score: you {score.you} — {score.opp} opp</div>
+          <div>ball status: {ball.status}</div>
+          <div>your swing: {player.swingState} @ {player.swingTimer}</div>
+          <div>opp swing: {opponent.swingState} @ {opponent.swingTimer}</div>
+          <div>{message}</div>
         </div>
       </div>
 
-      <div style={{ position: 'absolute', top: 16, right: 16, width: 296, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
+      <div style={{ position: 'absolute', top: 16, right: 16, width: 304, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Aim / stroke</div>
         <div style={{ fontSize: 12, marginBottom: 6 }}>Target X: {target.x.toFixed(2)}</div>
         <input type="range" min={-TABLE.width / 2 + 0.06} max={TABLE.width / 2 - 0.06} step={0.01} value={target.x} onChange={(e) => setTarget((t) => ({ ...t, x: Number(e.target.value) }))} style={{ width: '100%' }} />
@@ -252,9 +305,7 @@ export default function App() {
           Serve mode
         </label>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-          <button onPointerDown={pointerDownSwing} onPointerUp={pointerUpSwing} onPointerCancel={pointerUpSwing} style={btn}>
-            Hold / release swing
-          </button>
+          <button onPointerDown={pointerDownSwing} onPointerUp={pointerUpSwing} onPointerCancel={pointerUpSwing} style={btn}>Hold / release swing</button>
           <button onClick={resetIdle} style={btnGhost}>Reset</button>
           <button onClick={() => setRunning((v) => !v)} style={btnGhost}>{running ? 'Pause' : 'Resume'}</button>
         </div>
@@ -263,15 +314,11 @@ export default function App() {
       </div>
 
       <div style={{ position: 'absolute', inset: 'auto 16px 16px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <TouchPad
-          label="Drag-to-aim"
-          onChange={(v) => setTarget({ x: v.x * (TABLE.width / 2 - 0.08), y: ((v.y + 1) / 2) * (TABLE.length / 2 - 0.14) + 0.07 })}
-        />
+        <TouchPad label="Drag-to-aim" onChange={(v) => setTarget({ x: v.x * (TABLE.width / 2 - 0.08), y: ((v.y + 1) / 2) * (TABLE.length / 2 - 0.14) + 0.07 })} />
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            We now queue a shot into a backswing and only apply it on the impact frame.
-            This begins to match the original structure where impact happens at a specific swing tick instead of instantly.
+            You can only swing during a hittable rally window or from idle serve state. The opponent now performs simple automatic returns, and the rally resets into a scored dead-ball state when the point ends.
           </div>
         </div>
       </div>
