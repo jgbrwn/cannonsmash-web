@@ -329,18 +329,73 @@ export interface PlayerState {
   lastImpactTimer: number | null
 }
 
+export interface ContactMetrics {
+  dx: number
+  dy: number
+  dz: number
+  distance: number
+  timingError: number
+  reachable: boolean
+}
+
+export interface ContactPointPrediction {
+  ball: BallState
+  etaTicks: number
+  playerX: number
+  playerY: number
+}
+
+export interface ImpactResult {
+  player: PlayerState
+  shot: ShotSolution | null
+  madeContact: boolean
+  quality: number
+  timingError: number
+  distance: number
+}
+
+const PLAYER_HOME_Y = TABLE.length / 2 + 0.22
+const PLAYER_MOVE_SPEED_X = 2.6 * TICK
+const PLAYER_MOVE_SPEED_Y = 3.3 * TICK
+const CONTACT_FORWARD = 0.22
+const CONTACT_LATERAL = 0.18
+const CONTACT_HEIGHT = 0.16
+const CONTACT_MAX_X = 0.28
+const CONTACT_MAX_Y = 0.34
+const CONTACT_MAX_Z = 0.34
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function moveTowards(current: number, target: number, maxDelta: number): number {
+  const delta = target - current
+  if (Math.abs(delta) <= maxDelta) return target
+  return current + Math.sign(delta) * maxDelta
+}
+
 export function createPlayer(side: PlayerSide): PlayerState {
   return {
     side,
     x: 0,
-    y: side > 0 ? -TABLE.length / 2 - 0.22 : TABLE.length / 2 + 0.22,
+    y: side > 0 ? -PLAYER_HOME_Y : PLAYER_HOME_Y,
     z: 1.05,
     targetX: 0,
-    targetY: TABLE.length / 4 * side,
+    targetY: side > 0 ? -PLAYER_HOME_Y : PLAYER_HOME_Y,
     swingTimer: 0,
     swingState: 'idle',
     requestedShot: null,
     lastImpactTimer: null,
+  }
+}
+
+export function setPlayerTarget(player: PlayerState, targetX: number, targetY: number): PlayerState {
+  return {
+    ...player,
+    targetX: clamp(targetX, -TABLE.width / 2 - 0.55, TABLE.width / 2 + 0.55),
+    targetY: player.side > 0
+      ? clamp(targetY, -TABLE.length / 2 - 0.75, -0.08)
+      : clamp(targetY, 0.08, TABLE.length / 2 + 0.75),
   }
 }
 
@@ -356,28 +411,102 @@ export function startSwing(player: PlayerState, shot: ShotSolution): PlayerState
 }
 
 export function stepPlayer(player: PlayerState): PlayerState {
-  if (player.swingState === 'idle') return player
+  const moved = {
+    ...player,
+    x: moveTowards(player.x, player.targetX, PLAYER_MOVE_SPEED_X),
+    y: moveTowards(player.y, player.targetY, PLAYER_MOVE_SPEED_Y),
+  }
 
-  const timer = player.swingTimer + 1
+  if (moved.swingState === 'idle') return moved
+
+  const timer = moved.swingTimer + 1
   if (timer === 20) {
-    return { ...player, swingTimer: timer, swingState: 'impact', lastImpactTimer: timer }
+    return { ...moved, swingTimer: timer, swingState: 'impact', lastImpactTimer: timer }
   }
   if (timer >= 50) {
-    return { ...player, swingTimer: 0, swingState: 'idle', requestedShot: null, lastImpactTimer: null }
+    return { ...moved, swingTimer: 0, swingState: 'idle', requestedShot: null, lastImpactTimer: null }
   }
-  return { ...player, swingTimer: timer, swingState: timer < 20 ? 'backswing' : 'recovery' }
+  return { ...moved, swingTimer: timer, swingState: timer < 20 ? 'backswing' : 'recovery' }
 }
 
-export function consumeImpact(player: PlayerState): { player: PlayerState; shot: ShotSolution | null } {
-  if (player.swingState !== 'impact' || !player.requestedShot) return { player, shot: null }
+export function getPlayerContactMetrics(player: PlayerState, ball: BallState): ContactMetrics {
+  const rx = player.x + player.side * CONTACT_LATERAL
+  const ry = player.y + player.side * CONTACT_FORWARD
+  const rz = player.z + CONTACT_HEIGHT
+  const dx = ball.x - rx
+  const dy = ball.y - ry
+  const dz = ball.z - rz
+  const distance = Math.hypot(dx, dy, dz)
+  const timingError = player.side * dy
+  const reachable = Math.abs(dx) <= CONTACT_MAX_X && Math.abs(dy) <= CONTACT_MAX_Y && Math.abs(dz) <= CONTACT_MAX_Z && distance <= 0.38
+  return { dx, dy, dz, distance, timingError, reachable }
+}
+
+function shapeShotForContact(ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
+  const distancePenalty = clamp(metrics.distance / 0.38, 0, 1)
+  const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
+  const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7
+  if (!metrics.reachable || quality < 0.16) return null
+
+  const adjustedTargetX = clamp(shot.targetX + metrics.dx * 0.75 + metrics.timingError * 0.16, -TABLE.width / 2 + 0.04, TABLE.width / 2 - 0.04)
+  const adjustedTargetY = clamp(
+    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1),
+    shot.targetY >= 0 ? 0.08 : -TABLE.length / 2 + 0.08,
+    shot.targetY >= 0 ? TABLE.length / 2 - 0.08 : -0.08,
+  )
+  const adjustedLevel = clamp(shot.level - timingPenalty * 0.18 - distancePenalty * 0.1, 0.45, 1)
+  const adjustedSpin = clamp(shot.spin - metrics.timingError * 0.9 - metrics.dx * 0.8, -1.2, 1.2)
+
+  return shot.isServe
+    ? solveTargetToVS(ball, adjustedTargetX, adjustedTargetY, adjustedLevel, adjustedSpin)
+    : solveTargetToV(ball, adjustedTargetX, adjustedTargetY, adjustedLevel, adjustedSpin)
+}
+
+export function resolveImpact(player: PlayerState, ball: BallState): ImpactResult {
+  if (player.swingState !== 'impact' || !player.requestedShot) {
+    return { player, shot: null, madeContact: false, quality: 0, timingError: 0, distance: Infinity }
+  }
+
+  const metrics = getPlayerContactMetrics(player, ball)
+  const shot = shapeShotForContact(ball, player.requestedShot, metrics)
+  const distancePenalty = clamp(metrics.distance / 0.38, 0, 1)
+  const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
+  const quality = clamp(1 - distancePenalty * 0.5 - timingPenalty * 0.7, 0, 1)
+
   return {
     player: { ...player, swingState: 'recovery', lastImpactTimer: null },
-    shot: player.requestedShot,
+    shot,
+    madeContact: Boolean(shot),
+    quality,
+    timingError: metrics.timingError,
+    distance: metrics.distance,
   }
 }
 
 export function isBallHittableForSide(ball: BallState, side: PlayerSide): boolean {
   return (side === 1 && ball.status === 3) || (side === -1 && ball.status === 1)
+}
+
+export function predictContactPoint(ball: BallState, side: PlayerSide, maxSteps = 180): ContactPointPrediction | null {
+  let cur = cloneBall(ball)
+  for (let i = 0; i < maxSteps; i++) {
+    if (
+      ((side === 1 && cur.y <= 0) || (side === -1 && cur.y >= 0)) &&
+      cur.z >= TABLE.height + 0.12 &&
+      cur.z <= 1.52 &&
+      cur.status >= 0
+    ) {
+      return {
+        ball: cur,
+        etaTicks: i,
+        playerX: clamp(cur.x - side * CONTACT_LATERAL, -TABLE.width / 2 - 0.45, TABLE.width / 2 + 0.45),
+        playerY: clamp(cur.y - side * CONTACT_FORWARD, side > 0 ? -TABLE.length / 2 - 0.72 : 0.08, side > 0 ? -0.08 : TABLE.length / 2 + 0.72),
+      }
+    }
+    cur = stepBall(cur)
+    if (cur.status < 0) break
+  }
+  return null
 }
 
 export function createNeutralBallForSide(side: PlayerSide): BallState {

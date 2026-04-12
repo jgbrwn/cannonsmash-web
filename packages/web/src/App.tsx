@@ -4,14 +4,17 @@ import {
   TABLE,
   TICK,
   applyShot,
-  consumeImpact,
   createIdleBall,
   createNeutralBallForSide,
   createPlayer,
   createSimpleReturnShot,
   findTableBounce,
+  getPlayerContactMetrics,
   isBallHittableForSide,
+  predictContactPoint,
+  resolveImpact,
   sampleTrajectory,
+  setPlayerTarget,
   solveTargetToV,
   solveTargetToVS,
   startSwing,
@@ -31,6 +34,9 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
+  const ballRef = useRef<BallState>(createIdleBall())
+  const playerRef = useRef<PlayerState>(createPlayer(1))
+  const opponentRef = useRef<PlayerState>(createPlayer(-1))
 
   const [ball, setBall] = useState<BallState>(() => createIdleBall())
   const [player, setPlayer] = useState<PlayerState>(() => createPlayer(1))
@@ -45,72 +51,99 @@ export default function App() {
   const [score, setScore] = useState({ you: 0, opp: 0 })
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
 
+  useEffect(() => { ballRef.current = ball }, [ball])
+  useEffect(() => { playerRef.current = player }, [player])
+  useEffect(() => { opponentRef.current = opponent }, [opponent])
+
   const predicted = useMemo(() => sampleTrajectory(ball, 260), [ball])
   const landing = useMemo(() => findTableBounce(predicted), [predicted])
+  const playerContact = useMemo(() => getPlayerContactMetrics(player, ball), [player, ball])
+  const contactPrediction = useMemo(() => predictContactPoint(ball, 1), [ball])
+  const opponentPrediction = useMemo(() => predictContactPoint(ball, -1), [ball])
 
   useEffect(() => {
     if (!running) return
     const id = setInterval(() => {
       aiCooldownRef.current = Math.max(0, aiCooldownRef.current - 1)
 
-      setPlayer((prev) => {
-        let next = stepPlayer(prev)
-        const impact = consumeImpact(next)
-        next = impact.player
-        if (impact.shot) {
-          setBall((prevBall) => applyShot(prevBall, impact.shot!))
-          setLastShot(impact.shot)
-          setShotQueued(null)
+      let nextBall = stepBall(ballRef.current)
+      let nextPlayer = playerRef.current
+      let nextOpponent = opponentRef.current
+      let nextMessage: string | null = null
+      let nextLastShot: ShotSolution | null = null
+      let clearQueuedShot = false
+
+      if (nextBall.status < 0 && ballRef.current.status >= 0) {
+        const oppWon = ballRef.current.status === 3 || ballRef.current.status === 4 || ballRef.current.status === 6
+        setScore((s) => oppWon ? { ...s, opp: s.opp + 1 } : { ...s, you: s.you + 1 })
+        aiCooldownRef.current = 0
+        nextMessage = oppWon ? 'Point to opponent.' : 'Point to you.'
+        nextBall = createIdleBall()
+        nextPlayer = createPlayer(1)
+        nextOpponent = createPlayer(-1)
+        clearQueuedShot = true
+      } else {
+        const playerPlan = predictContactPoint(nextBall, 1)
+        const oppPlan = predictContactPoint(nextBall, -1)
+
+        if (!serveMode && playerPlan && nextPlayer.swingState === 'idle') {
+          nextPlayer = setPlayerTarget(nextPlayer, playerPlan.playerX, playerPlan.playerY)
         }
-        return next
-      })
-
-      setOpponent((prev) => {
-        let next = stepPlayer(prev)
-        const impact = consumeImpact(next)
-        next = impact.player
-        if (impact.shot) {
-          setBall((prevBall) => applyShot(prevBall, impact.shot!))
-          setMessage('Opponent returns!')
-        }
-        return next
-      })
-
-      setBall((prev) => {
-        const next = stepBall(prev)
-
-        if (next.status < 0 && prev.status >= 0) {
-          const oppWon = prev.status === 3 || prev.status === 4 || prev.status === 6
-          setScore((s) => oppWon ? { ...s, opp: s.opp + 1 } : { ...s, you: s.you + 1 })
-          setMessage(oppWon ? 'Point to opponent.' : 'Point to you.')
-          aiCooldownRef.current = 0
-          setShotQueued(null)
-          setPlayer(createPlayer(1))
-          setOpponent(createPlayer(-1))
-          return createIdleBall()
+        if (oppPlan) {
+          nextOpponent = setPlayerTarget(nextOpponent, oppPlan.playerX, oppPlan.playerY)
         }
 
-        if (isBallHittableForSide(next, -1) && aiCooldownRef.current === 0) {
-          const aiBall = createNeutralBallForSide(-1)
-          aiBall.x = next.x
-          aiBall.y = next.y
-          aiBall.z = next.z
-          aiBall.vx = next.vx
-          aiBall.vy = next.vy
-          aiBall.vz = next.vz
-          aiBall.spin = next.spin
-          aiBall.status = next.status
+        if (isBallHittableForSide(nextBall, -1) && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
+          const aiBall = { ...nextBall }
           const aiShot = createSimpleReturnShot(aiBall, -1)
-          setOpponent((prevOpp) => startSwing(prevOpp, aiShot))
+          nextOpponent = startSwing(nextOpponent, aiShot)
           aiCooldownRef.current = 65
-          setMessage('Opponent preparing a return...')
+          nextMessage = 'Opponent moving into the ball...'
         }
 
-        return next
-      })
+        nextPlayer = stepPlayer(nextPlayer)
+        if (nextPlayer.swingState === 'impact') {
+          const impact = resolveImpact(nextPlayer, nextBall)
+          nextPlayer = impact.player
+          clearQueuedShot = true
+          if (impact.madeContact && impact.shot) {
+            nextBall = applyShot(nextBall, impact.shot)
+            nextLastShot = impact.shot
+            nextMessage = impact.quality > 0.72
+              ? 'Clean contact.'
+              : impact.timingError > 0.05
+                ? 'Late contact.'
+                : impact.timingError < -0.05
+                  ? 'Early contact.'
+                  : 'Reached and guided it back.'
+          } else {
+            nextMessage = 'Missed contact — get into position first.'
+          }
+        }
+
+        nextOpponent = stepPlayer(nextOpponent)
+        if (nextOpponent.swingState === 'impact') {
+          const impact = resolveImpact(nextOpponent, nextBall)
+          nextOpponent = impact.player
+          if (impact.madeContact && impact.shot) {
+            nextBall = applyShot(nextBall, impact.shot)
+            nextMessage = impact.quality > 0.72 ? 'Opponent returns cleanly.' : 'Opponent scrambles a return!'
+          }
+        }
+      }
+
+      ballRef.current = nextBall
+      playerRef.current = nextPlayer
+      opponentRef.current = nextOpponent
+      setBall(nextBall)
+      setPlayer(nextPlayer)
+      setOpponent(nextOpponent)
+      if (nextLastShot) setLastShot(nextLastShot)
+      if (clearQueuedShot) setShotQueued(null)
+      if (nextMessage) setMessage(nextMessage)
     }, TICK * 1000)
     return () => clearInterval(id)
-  }, [running])
+  }, [running, serveMode])
 
   useEffect(() => {
     const el = mountRef.current
@@ -163,14 +196,21 @@ export default function App() {
     scene.add(ballMesh)
 
     const playerMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0x98c1ff }))
-    const oppMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0xffc7b0 }))
-    scene.add(playerMesh)
-    scene.add(oppMesh)
+      const oppMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0xffc7b0 }))
+      scene.add(playerMesh)
+      scene.add(oppMesh)
 
-    const racket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xff8f70 }))
-    const oppRacket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xffd46d }))
-    scene.add(racket)
-    scene.add(oppRacket)
+      const racket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xff8f70 }))
+      const oppRacket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xffd46d }))
+      scene.add(racket)
+      scene.add(oppRacket)
+
+      const playerReach = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 48), new THREE.MeshBasicMaterial({ color: 0x7ed7ff, transparent: true, opacity: 0.2, side: THREE.DoubleSide }))
+      const oppReach = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 48), new THREE.MeshBasicMaterial({ color: 0xffc7b0, transparent: true, opacity: 0.16, side: THREE.DoubleSide }))
+      playerReach.rotation.x = -Math.PI / 2
+      oppReach.rotation.x = -Math.PI / 2
+      scene.add(playerReach)
+      scene.add(oppReach)
 
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(TABLE.ballRadius * 1.4, 24), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22 }))
     shadow.rotation.x = -Math.PI / 2
@@ -205,12 +245,14 @@ export default function App() {
       oppMesh.position.set(opponent.x, opponent.y, opponent.z)
 
       const swingPhase = player.swingState === 'backswing' ? -0.12 : player.swingState === 'impact' ? 0.22 : player.swingState === 'recovery' ? 0.12 : 0.02
-      racket.position.set(player.x + 0.18 + swingPhase, player.y + 0.02, player.z + 0.16)
+      racket.position.set(player.x + 0.18 + swingPhase, player.y + 0.22, player.z + 0.16)
       racket.rotation.y = -Math.PI / 5
+      playerReach.position.set(player.x + 0.18, player.y + 0.22, TABLE.height + 0.004)
 
       const oppSwingPhase = opponent.swingState === 'backswing' ? 0.12 : opponent.swingState === 'impact' ? -0.22 : opponent.swingState === 'recovery' ? -0.12 : -0.02
-      oppRacket.position.set(opponent.x - 0.18 + oppSwingPhase, opponent.y - 0.02, opponent.z + 0.16)
+      oppRacket.position.set(opponent.x - 0.18 + oppSwingPhase, opponent.y - 0.22, opponent.z + 0.16)
       oppRacket.rotation.y = Math.PI / 5
+      oppReach.position.set(opponent.x - 0.18, opponent.y - 0.22, TABLE.height + 0.004)
 
       targetRing.position.set(target.x, target.y, TABLE.height + 0.004)
       trajGeom.setFromPoints(predicted.map((p) => new THREE.Vector3(p.x, p.y, p.z)))
@@ -236,7 +278,7 @@ export default function App() {
 
   const queueShot = (nextLevel = level) => {
     if (!serveMode && !isBallHittableForSide(ball, 1) && ball.status !== 8) {
-      setMessage('Ball not in your hittable window yet.')
+      setMessage('Ball not on your side yet.')
       return
     }
 
@@ -248,16 +290,25 @@ export default function App() {
       ? solveTargetToVS(baseBall, target.x, target.y, nextLevel, spin)
       : solveTargetToV(baseBall, target.x, target.y, nextLevel, spin)
 
+    const nextPlayer = startSwing(playerRef.current, shot)
+    playerRef.current = nextPlayer
+    ballRef.current = baseBall
     setShotQueued(shot)
-    setPlayer((prev) => startSwing(prev, shot))
+    setPlayer(nextPlayer)
     setBall(baseBall)
-    setMessage(serveMode ? 'Serve swing started.' : 'Swing started.')
+    setMessage(serveMode ? 'Serve swing started — move through the ball.' : 'Swing started — footwork assist engaged.')
   }
 
   const resetIdle = () => {
-    setBall(createIdleBall())
-    setPlayer(createPlayer(1))
-    setOpponent(createPlayer(-1))
+    const idleBall = createIdleBall()
+    const idlePlayer = createPlayer(1)
+    const idleOpponent = createPlayer(-1)
+    ballRef.current = idleBall
+    playerRef.current = idlePlayer
+    opponentRef.current = idleOpponent
+    setBall(idleBall)
+    setPlayer(idlePlayer)
+    setOpponent(idleOpponent)
     setLastShot(null)
     setShotQueued(null)
     setMessage('Reset.')
@@ -286,6 +337,8 @@ export default function App() {
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
           <div>score: you {score.you} — {score.opp} opp</div>
           <div>ball status: {ball.status}</div>
+          <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)}</div>
+          <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer}</div>
           <div>opp swing: {opponent.swingState} @ {opponent.swingTimer}</div>
           <div>{message}</div>
@@ -310,6 +363,8 @@ export default function App() {
           <button onClick={() => setRunning((v) => !v)} style={btnGhost}>{running ? 'Pause' : 'Resume'}</button>
         </div>
         {shotQueued && <div style={{ fontSize: 12, marginTop: 10, opacity: 0.9 }}>queued impact shot ready</div>}
+        {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
+        {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
         {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
       </div>
 
@@ -318,7 +373,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            You can only swing during a hittable rally window or from idle serve state. The opponent now performs simple automatic returns, and the rally resets into a scored dead-ball state when the point ends.
+            Footwork now auto-assists toward a predicted intercept, contact is tied to actual player/racket reach, and off-timed swings can become early, late, or outright misses.
           </div>
         </div>
       </div>
