@@ -316,8 +316,11 @@ export function findTableBounce(path: BallState[]): BallState | undefined {
 export type PlayerSide = 1 | -1
 export type SwingState = 'idle' | 'backswing' | 'impact' | 'recovery'
 
+export type PlayerArchetype = 'PenAttack' | 'PenDrive' | 'ShakeCut'
+
 export interface PlayerState {
   side: PlayerSide
+  archetype: PlayerArchetype
   x: number
   y: number
   z: number
@@ -327,6 +330,8 @@ export interface PlayerState {
   swingState: SwingState
   requestedShot: ShotSolution | null
   lastImpactTimer: number | null
+  status: number
+  statusMax: number
 }
 
 export interface ContactMetrics {
@@ -354,15 +359,70 @@ export interface ImpactResult {
   distance: number
 }
 
+export interface ArchetypeProfile {
+  name: PlayerArchetype
+  moveSpeedX: number
+  moveSpeedY: number
+  reachX: number
+  reachY: number
+  reachZ: number
+  contactRadius: number
+  spinBias: number
+  powerBias: number
+  recoveryCost: number
+  moveCost: number
+  statusMax: number
+}
+
 const PLAYER_HOME_Y = TABLE.length / 2 + 0.22
-const PLAYER_MOVE_SPEED_X = 2.6 * TICK
-const PLAYER_MOVE_SPEED_Y = 3.3 * TICK
 const CONTACT_FORWARD = 0.22
 const CONTACT_LATERAL = 0.18
 const CONTACT_HEIGHT = 0.16
-const CONTACT_MAX_X = 0.28
-const CONTACT_MAX_Y = 0.34
-const CONTACT_MAX_Z = 0.34
+
+export const ARCHETYPES: Record<PlayerArchetype, ArchetypeProfile> = {
+  PenAttack: {
+    name: 'PenAttack',
+    moveSpeedX: 2.8 * TICK,
+    moveSpeedY: 3.35 * TICK,
+    reachX: 0.29,
+    reachY: 0.34,
+    reachZ: 0.34,
+    contactRadius: 0.39,
+    spinBias: 0.08,
+    powerBias: 0.09,
+    recoveryCost: 0.028,
+    moveCost: 0.004,
+    statusMax: 1,
+  },
+  PenDrive: {
+    name: 'PenDrive',
+    moveSpeedX: 2.6 * TICK,
+    moveSpeedY: 3.15 * TICK,
+    reachX: 0.27,
+    reachY: 0.33,
+    reachZ: 0.33,
+    contactRadius: 0.37,
+    spinBias: 0.16,
+    powerBias: 0.03,
+    recoveryCost: 0.031,
+    moveCost: 0.0045,
+    statusMax: 1,
+  },
+  ShakeCut: {
+    name: 'ShakeCut',
+    moveSpeedX: 3.0 * TICK,
+    moveSpeedY: 3.55 * TICK,
+    reachX: 0.31,
+    reachY: 0.36,
+    reachZ: 0.36,
+    contactRadius: 0.4,
+    spinBias: -0.12,
+    powerBias: -0.08,
+    recoveryCost: 0.022,
+    moveCost: 0.0035,
+    statusMax: 1,
+  },
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
@@ -374,9 +434,11 @@ function moveTowards(current: number, target: number, maxDelta: number): number 
   return current + Math.sign(delta) * maxDelta
 }
 
-export function createPlayer(side: PlayerSide): PlayerState {
+export function createPlayer(side: PlayerSide, archetype: PlayerArchetype = 'PenAttack'): PlayerState {
+  const profile = ARCHETYPES[archetype]
   return {
     side,
+    archetype,
     x: 0,
     y: side > 0 ? -PLAYER_HOME_Y : PLAYER_HOME_Y,
     z: 1.05,
@@ -386,6 +448,8 @@ export function createPlayer(side: PlayerSide): PlayerState {
     swingState: 'idle',
     requestedShot: null,
     lastImpactTimer: null,
+    status: profile.statusMax,
+    statusMax: profile.statusMax,
   }
 }
 
@@ -399,37 +463,62 @@ export function setPlayerTarget(player: PlayerState, targetX: number, targetY: n
   }
 }
 
+export function getArchetypeProfile(player: PlayerState): ArchetypeProfile {
+  return ARCHETYPES[player.archetype]
+}
+
+export function getStatusRatio(player: PlayerState): number {
+  return player.statusMax > 0 ? clamp(player.status / player.statusMax, 0, 1) : 0
+}
+
+export function recoverPlayerStatus(player: PlayerState, amount = 0.0028): PlayerState {
+  return {
+    ...player,
+    status: clamp(player.status + amount, 0, player.statusMax),
+  }
+}
+
 export function startSwing(player: PlayerState, shot: ShotSolution): PlayerState {
   if (player.swingState !== 'idle') return player
+  const profile = getArchetypeProfile(player)
   return {
     ...player,
     swingTimer: 1,
     swingState: 'backswing',
     requestedShot: shot,
     lastImpactTimer: null,
+    status: clamp(player.status - profile.recoveryCost * 0.6, 0, player.statusMax),
   }
 }
 
 export function stepPlayer(player: PlayerState): PlayerState {
+  const profile = getArchetypeProfile(player)
+  const statusRatio = getStatusRatio(player)
+  const moveScale = 0.68 + statusRatio * 0.42
+  const movedX = moveTowards(player.x, player.targetX, profile.moveSpeedX * moveScale)
+  const movedY = moveTowards(player.y, player.targetY, profile.moveSpeedY * moveScale)
+  const moveCost = (Math.abs(movedX - player.x) + Math.abs(movedY - player.y)) * profile.moveCost
   const moved = {
     ...player,
-    x: moveTowards(player.x, player.targetX, PLAYER_MOVE_SPEED_X),
-    y: moveTowards(player.y, player.targetY, PLAYER_MOVE_SPEED_Y),
+    x: movedX,
+    y: movedY,
+    status: clamp(player.status - moveCost, 0, player.statusMax),
   }
 
-  if (moved.swingState === 'idle') return moved
+  if (moved.swingState === 'idle') return recoverPlayerStatus(moved)
 
   const timer = moved.swingTimer + 1
   if (timer === 20) {
     return { ...moved, swingTimer: timer, swingState: 'impact', lastImpactTimer: timer }
   }
   if (timer >= 50) {
-    return { ...moved, swingTimer: 0, swingState: 'idle', requestedShot: null, lastImpactTimer: null }
+    return recoverPlayerStatus({ ...moved, swingTimer: 0, swingState: 'idle', requestedShot: null, lastImpactTimer: null }, 0.01)
   }
   return { ...moved, swingTimer: timer, swingState: timer < 20 ? 'backswing' : 'recovery' }
 }
 
 export function getPlayerContactMetrics(player: PlayerState, ball: BallState): ContactMetrics {
+  const profile = getArchetypeProfile(player)
   const rx = player.x + player.side * CONTACT_LATERAL
   const ry = player.y + player.side * CONTACT_FORWARD
   const rz = player.z + CONTACT_HEIGHT
@@ -438,24 +527,32 @@ export function getPlayerContactMetrics(player: PlayerState, ball: BallState): C
   const dz = ball.z - rz
   const distance = Math.hypot(dx, dy, dz)
   const timingError = player.side * dy
-  const reachable = Math.abs(dx) <= CONTACT_MAX_X && Math.abs(dy) <= CONTACT_MAX_Y && Math.abs(dz) <= CONTACT_MAX_Z && distance <= 0.38
+  const reachable = Math.abs(dx) <= profile.reachX && Math.abs(dy) <= profile.reachY && Math.abs(dz) <= profile.reachZ && distance <= profile.contactRadius
   return { dx, dy, dz, distance, timingError, reachable }
 }
 
-function shapeShotForContact(ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
-  const distancePenalty = clamp(metrics.distance / 0.38, 0, 1)
+function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
+  const profile = getArchetypeProfile(player)
+  const statusRatio = getStatusRatio(player)
+  const distancePenalty = clamp(metrics.distance / profile.contactRadius, 0, 1)
   const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
-  const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7
+  const fatiguePenalty = 1 - statusRatio
+  const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7 - fatiguePenalty * 0.45
   if (!metrics.reachable || quality < 0.16) return null
 
-  const adjustedTargetX = clamp(shot.targetX + metrics.dx * 0.75 + metrics.timingError * 0.16, -TABLE.width / 2 + 0.04, TABLE.width / 2 - 0.04)
+  const errorScale = fatiguePenalty * 0.32
+  const adjustedTargetX = clamp(
+    shot.targetX + metrics.dx * (0.75 + errorScale) + metrics.timingError * 0.16 + profile.powerBias * 0.08,
+    -TABLE.width / 2 + 0.04,
+    TABLE.width / 2 - 0.04,
+  )
   const adjustedTargetY = clamp(
-    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1),
+    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1) + profile.powerBias * 0.16,
     shot.targetY >= 0 ? 0.08 : -TABLE.length / 2 + 0.08,
     shot.targetY >= 0 ? TABLE.length / 2 - 0.08 : -0.08,
   )
-  const adjustedLevel = clamp(shot.level - timingPenalty * 0.18 - distancePenalty * 0.1, 0.45, 1)
-  const adjustedSpin = clamp(shot.spin - metrics.timingError * 0.9 - metrics.dx * 0.8, -1.2, 1.2)
+  const adjustedLevel = clamp(shot.level + profile.powerBias - timingPenalty * 0.18 - distancePenalty * 0.1 - fatiguePenalty * 0.18, 0.38, 1)
+  const adjustedSpin = clamp(shot.spin + profile.spinBias - metrics.timingError * 0.9 - metrics.dx * 0.8 - fatiguePenalty * 0.15, -1.2, 1.2)
 
   return shot.isServe
     ? solveTargetToVS(ball, adjustedTargetX, adjustedTargetY, adjustedLevel, adjustedSpin)
@@ -468,13 +565,16 @@ export function resolveImpact(player: PlayerState, ball: BallState): ImpactResul
   }
 
   const metrics = getPlayerContactMetrics(player, ball)
-  const shot = shapeShotForContact(ball, player.requestedShot, metrics)
-  const distancePenalty = clamp(metrics.distance / 0.38, 0, 1)
+  const profile = getArchetypeProfile(player)
+  const statusRatio = getStatusRatio(player)
+  const shot = shapeShotForContact(player, ball, player.requestedShot, metrics)
+  const distancePenalty = clamp(metrics.distance / profile.contactRadius, 0, 1)
   const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
-  const quality = clamp(1 - distancePenalty * 0.5 - timingPenalty * 0.7, 0, 1)
+  const quality = clamp(1 - distancePenalty * 0.5 - timingPenalty * 0.7 - (1 - statusRatio) * 0.45, 0, 1)
+  const spent = clamp(profile.recoveryCost + distancePenalty * 0.012 + timingPenalty * 0.02, 0, player.statusMax)
 
   return {
-    player: { ...player, swingState: 'recovery', lastImpactTimer: null },
+    player: { ...player, swingState: 'recovery', lastImpactTimer: null, status: clamp(player.status - spent, 0, player.statusMax) },
     shot,
     madeContact: Boolean(shot),
     quality,
@@ -509,6 +609,19 @@ export function predictContactPoint(ball: BallState, side: PlayerSide, maxSteps 
   return null
 }
 
+export function pickAIMoveTarget(player: PlayerState, ball: BallState): ContactPointPrediction | null {
+  const prediction = predictContactPoint(ball, player.side)
+  if (!prediction) return null
+  const profile = getArchetypeProfile(player)
+  const statusRatio = getStatusRatio(player)
+  const anticipation = 1 + (profile.moveSpeedY / (3.2 * TICK) - 1) * 0.3 + (statusRatio - 0.5) * 0.2
+  return {
+    ...prediction,
+    playerX: clamp(prediction.playerX * anticipation, -TABLE.width / 2 - 0.5, TABLE.width / 2 + 0.5),
+    playerY: prediction.playerY,
+  }
+}
+
 export function createNeutralBallForSide(side: PlayerSide): BallState {
   return {
     x: side > 0 ? 0.3 : -0.3,
@@ -522,11 +635,13 @@ export function createNeutralBallForSide(side: PlayerSide): BallState {
   }
 }
 
-export function createSimpleReturnShot(ball: BallState, side: PlayerSide): ShotSolution {
+export function createSimpleReturnShot(ball: BallState, side: PlayerSide, archetype: PlayerArchetype = 'PenAttack', statusRatio = 1): ShotSolution {
   const lane = side > 0 ? -1 : 1
-  const targetX = (Math.random() * 0.7 - 0.35) * TABLE.width
-  const targetY = lane * (TABLE.length * (0.22 + Math.random() * 0.18))
-  const spin = side > 0 ? 0.35 : -0.2 + Math.random() * 0.8
-  const level = 0.72 + Math.random() * 0.18
+  const profile = ARCHETYPES[archetype]
+  const spread = 0.22 + (1 - statusRatio) * 0.12
+  const targetX = (Math.random() * 0.7 - 0.35 + profile.spinBias * 0.12) * TABLE.width
+  const targetY = lane * (TABLE.length * (0.22 + Math.random() * 0.18 + profile.powerBias * 0.08))
+  const spin = clamp((side > 0 ? 0.35 : 0.15) + profile.spinBias + (Math.random() * 2 - 1) * spread, -1.2, 1.2)
+  const level = clamp(0.72 + profile.powerBias + Math.random() * 0.18 - (1 - statusRatio) * 0.16, 0.45, 1)
   return solveTargetToV(ball, targetX, targetY, level, spin)
 }

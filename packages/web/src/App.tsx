@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import {
   TABLE,
   TICK,
+  ARCHETYPES,
   applyShot,
   createIdleBall,
   createNeutralBallForSide,
@@ -10,7 +11,9 @@ import {
   createSimpleReturnShot,
   findTableBounce,
   getPlayerContactMetrics,
+  getStatusRatio,
   isBallHittableForSide,
+  pickAIMoveTarget,
   predictContactPoint,
   resolveImpact,
   sampleTrajectory,
@@ -22,6 +25,7 @@ import {
   stepPlayer,
   tossForServe,
   type BallState,
+  type PlayerArchetype,
   type PlayerState,
   type ShotSolution,
 } from '@csmash/core'
@@ -35,12 +39,14 @@ export default function App() {
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
   const ballRef = useRef<BallState>(createIdleBall())
-  const playerRef = useRef<PlayerState>(createPlayer(1))
-  const opponentRef = useRef<PlayerState>(createPlayer(-1))
+  const playerRef = useRef<PlayerState>(createPlayer(1, 'PenAttack'))
+  const opponentRef = useRef<PlayerState>(createPlayer(-1, 'ShakeCut'))
 
   const [ball, setBall] = useState<BallState>(() => createIdleBall())
-  const [player, setPlayer] = useState<PlayerState>(() => createPlayer(1))
-  const [opponent, setOpponent] = useState<PlayerState>(() => createPlayer(-1))
+  const [playerArchetype, setPlayerArchetype] = useState<PlayerArchetype>('PenAttack')
+  const [oppArchetype, setOppArchetype] = useState<PlayerArchetype>('ShakeCut')
+  const [player, setPlayer] = useState<PlayerState>(() => createPlayer(1, 'PenAttack'))
+  const [opponent, setOpponent] = useState<PlayerState>(() => createPlayer(-1, 'ShakeCut'))
   const [running, setRunning] = useState(true)
   const [target, setTarget] = useState<Vec2>({ x: 0, y: TABLE.length / 4 })
   const [spin, setSpin] = useState(0.35)
@@ -54,12 +60,24 @@ export default function App() {
   useEffect(() => { ballRef.current = ball }, [ball])
   useEffect(() => { playerRef.current = player }, [player])
   useEffect(() => { opponentRef.current = opponent }, [opponent])
+  useEffect(() => {
+    const nextPlayer = createPlayer(1, playerArchetype)
+    playerRef.current = nextPlayer
+    setPlayer(nextPlayer)
+  }, [playerArchetype])
+  useEffect(() => {
+    const nextOpponent = createPlayer(-1, oppArchetype)
+    opponentRef.current = nextOpponent
+    setOpponent(nextOpponent)
+  }, [oppArchetype])
 
   const predicted = useMemo(() => sampleTrajectory(ball, 260), [ball])
   const landing = useMemo(() => findTableBounce(predicted), [predicted])
   const playerContact = useMemo(() => getPlayerContactMetrics(player, ball), [player, ball])
   const contactPrediction = useMemo(() => predictContactPoint(ball, 1), [ball])
   const opponentPrediction = useMemo(() => predictContactPoint(ball, -1), [ball])
+  const playerStatusRatio = useMemo(() => getStatusRatio(player), [player])
+  const oppStatusRatio = useMemo(() => getStatusRatio(opponent), [opponent])
 
   useEffect(() => {
     if (!running) return
@@ -79,12 +97,12 @@ export default function App() {
         aiCooldownRef.current = 0
         nextMessage = oppWon ? 'Point to opponent.' : 'Point to you.'
         nextBall = createIdleBall()
-        nextPlayer = createPlayer(1)
-        nextOpponent = createPlayer(-1)
+        nextPlayer = createPlayer(1, playerArchetype)
+        nextOpponent = createPlayer(-1, oppArchetype)
         clearQueuedShot = true
       } else {
         const playerPlan = predictContactPoint(nextBall, 1)
-        const oppPlan = predictContactPoint(nextBall, -1)
+        const oppPlan = pickAIMoveTarget(nextOpponent, nextBall)
 
         if (!serveMode && playerPlan && nextPlayer.swingState === 'idle') {
           nextPlayer = setPlayerTarget(nextPlayer, playerPlan.playerX, playerPlan.playerY)
@@ -95,7 +113,7 @@ export default function App() {
 
         if (isBallHittableForSide(nextBall, -1) && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
           const aiBall = { ...nextBall }
-          const aiShot = createSimpleReturnShot(aiBall, -1)
+          const aiShot = createSimpleReturnShot(aiBall, -1, nextOpponent.archetype, getStatusRatio(nextOpponent))
           nextOpponent = startSwing(nextOpponent, aiShot)
           aiCooldownRef.current = 65
           nextMessage = 'Opponent moving into the ball...'
@@ -111,13 +129,15 @@ export default function App() {
             nextLastShot = impact.shot
             nextMessage = impact.quality > 0.72
               ? 'Clean contact.'
-              : impact.timingError > 0.05
-                ? 'Late contact.'
-                : impact.timingError < -0.05
-                  ? 'Early contact.'
-                  : 'Reached and guided it back.'
+              : impact.quality < 0.38
+                ? 'Fatigued contact.'
+                : impact.timingError > 0.05
+                  ? 'Late contact.'
+                  : impact.timingError < -0.05
+                    ? 'Early contact.'
+                    : 'Reached and guided it back.'
           } else {
-            nextMessage = 'Missed contact — get into position first.'
+            nextMessage = playerStatusRatio < 0.3 ? 'Too drained — missed contact.' : 'Missed contact — get into position first.'
           }
         }
 
@@ -127,7 +147,11 @@ export default function App() {
           nextOpponent = impact.player
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
-            nextMessage = impact.quality > 0.72 ? 'Opponent returns cleanly.' : 'Opponent scrambles a return!'
+            nextMessage = impact.quality > 0.72
+              ? 'Opponent returns cleanly.'
+              : getStatusRatio(nextOpponent) < 0.3
+                ? 'Opponent lunges a tired return.'
+                : 'Opponent scrambles a return!'
           }
         }
       }
@@ -143,7 +167,7 @@ export default function App() {
       if (nextMessage) setMessage(nextMessage)
     }, TICK * 1000)
     return () => clearInterval(id)
-  }, [running, serveMode])
+  }, [running, serveMode, playerArchetype, oppArchetype, playerStatusRatio])
 
   useEffect(() => {
     const el = mountRef.current
@@ -196,21 +220,21 @@ export default function App() {
     scene.add(ballMesh)
 
     const playerMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0x98c1ff }))
-      const oppMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0xffc7b0 }))
-      scene.add(playerMesh)
-      scene.add(oppMesh)
+    const oppMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.11, 0.6, 6, 12), new THREE.MeshPhongMaterial({ color: 0xffc7b0 }))
+    scene.add(playerMesh)
+    scene.add(oppMesh)
 
-      const racket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xff8f70 }))
-      const oppRacket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xffd46d }))
-      scene.add(racket)
-      scene.add(oppRacket)
+    const racket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xff8f70 }))
+    const oppRacket = new THREE.Mesh(new THREE.CircleGeometry(0.12, 24), new THREE.MeshPhongMaterial({ color: 0xffd46d }))
+    scene.add(racket)
+    scene.add(oppRacket)
 
-      const playerReach = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 48), new THREE.MeshBasicMaterial({ color: 0x7ed7ff, transparent: true, opacity: 0.2, side: THREE.DoubleSide }))
-      const oppReach = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 48), new THREE.MeshBasicMaterial({ color: 0xffc7b0, transparent: true, opacity: 0.16, side: THREE.DoubleSide }))
-      playerReach.rotation.x = -Math.PI / 2
-      oppReach.rotation.x = -Math.PI / 2
-      scene.add(playerReach)
-      scene.add(oppReach)
+    const playerReach = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 48), new THREE.MeshBasicMaterial({ color: 0x7ed7ff, transparent: true, opacity: 0.2, side: THREE.DoubleSide }))
+    const oppReach = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 48), new THREE.MeshBasicMaterial({ color: 0xffc7b0, transparent: true, opacity: 0.16, side: THREE.DoubleSide }))
+    playerReach.rotation.x = -Math.PI / 2
+    oppReach.rotation.x = -Math.PI / 2
+    scene.add(playerReach)
+    scene.add(oppReach)
 
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(TABLE.ballRadius * 1.4, 24), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22 }))
     shadow.rotation.x = -Math.PI / 2
@@ -248,11 +272,13 @@ export default function App() {
       racket.position.set(player.x + 0.18 + swingPhase, player.y + 0.22, player.z + 0.16)
       racket.rotation.y = -Math.PI / 5
       playerReach.position.set(player.x + 0.18, player.y + 0.22, TABLE.height + 0.004)
+      playerReach.scale.setScalar(ARCHETYPES[player.archetype].contactRadius / 0.38)
 
       const oppSwingPhase = opponent.swingState === 'backswing' ? 0.12 : opponent.swingState === 'impact' ? -0.22 : opponent.swingState === 'recovery' ? -0.12 : -0.02
       oppRacket.position.set(opponent.x - 0.18 + oppSwingPhase, opponent.y - 0.22, opponent.z + 0.16)
       oppRacket.rotation.y = Math.PI / 5
       oppReach.position.set(opponent.x - 0.18, opponent.y - 0.22, TABLE.height + 0.004)
+      oppReach.scale.setScalar(ARCHETYPES[opponent.archetype].contactRadius / 0.38)
 
       targetRing.position.set(target.x, target.y, TABLE.height + 0.004)
       trajGeom.setFromPoints(predicted.map((p) => new THREE.Vector3(p.x, p.y, p.z)))
@@ -301,8 +327,8 @@ export default function App() {
 
   const resetIdle = () => {
     const idleBall = createIdleBall()
-    const idlePlayer = createPlayer(1)
-    const idleOpponent = createPlayer(-1)
+    const idlePlayer = createPlayer(1, playerArchetype)
+    const idleOpponent = createPlayer(-1, oppArchetype)
     ballRef.current = idleBall
     playerRef.current = idlePlayer
     opponentRef.current = idleOpponent
@@ -337,6 +363,8 @@ export default function App() {
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
           <div>score: you {score.you} — {score.opp} opp</div>
           <div>ball status: {ball.status}</div>
+          <div>you: {player.archetype} · status {(playerStatusRatio * 100).toFixed(0)}%</div>
+          <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
           <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)}</div>
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer}</div>
@@ -357,6 +385,20 @@ export default function App() {
           <input type="checkbox" checked={serveMode} onChange={(e) => setServeMode(e.target.checked)} />
           Serve mode
         </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
+          <label style={{ fontSize: 12 }}>
+            You
+            <select value={playerArchetype} onChange={(e) => setPlayerArchetype(e.target.value as PlayerArchetype)} style={selectStyle}>
+              {Object.keys(ARCHETYPES).map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 12 }}>
+            Opp
+            <select value={oppArchetype} onChange={(e) => setOppArchetype(e.target.value as PlayerArchetype)} style={selectStyle}>
+              {Object.keys(ARCHETYPES).map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+        </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <button onPointerDown={pointerDownSwing} onPointerUp={pointerUpSwing} onPointerCancel={pointerUpSwing} style={btn}>Hold / release swing</button>
           <button onClick={resetIdle} style={btnGhost}>Reset</button>
@@ -373,7 +415,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Footwork now auto-assists toward a predicted intercept, contact is tied to actual player/racket reach, and off-timed swings can become early, late, or outright misses.
+            Status now drains from movement and swinging, recovers while settling, and feeds into contact quality. Archetypes now change reach, mobility, spin/power bias, and the opponent's return tendencies.
           </div>
         </div>
       </div>
@@ -383,6 +425,7 @@ export default function App() {
 
 const btn: React.CSSProperties = { padding: '10px 12px', borderRadius: 10, border: 0, background: '#7ed7ff', color: '#00131a', fontWeight: 700 }
 const btnGhost: React.CSSProperties = { padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', background: 'transparent', color: 'white', fontWeight: 700 }
+const selectStyle: React.CSSProperties = { width: '100%', marginTop: 4, borderRadius: 8, padding: '6px 8px', background: 'rgba(255,255,255,0.08)', color: 'white', border: '1px solid rgba(255,255,255,0.14)' }
 
 function TouchPad({ label, onChange }: { label: string; onChange: (v: Vec2) => void }) {
   const ref = useRef<HTMLDivElement | null>(null)
