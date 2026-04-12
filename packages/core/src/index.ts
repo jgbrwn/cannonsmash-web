@@ -27,7 +27,31 @@ export interface BallState {
   status: BallStatus
 }
 
+export interface ShotSolution {
+  vx: number
+  vy: number
+  vz: number
+  targetX: number
+  targetY: number
+  spin: number
+  level: number
+  isServe: boolean
+}
+
 export const gravity = (spin: number) => 9.8 + spin * 5
+
+export function createIdleBall(): BallState {
+  return {
+    x: 0,
+    y: -0.9,
+    z: TABLE.height + 0.28,
+    vx: 0,
+    vy: 0,
+    vz: 0,
+    spin: 0,
+    status: 8,
+  }
+}
 
 export function createDemoBall(): BallState {
   return {
@@ -44,6 +68,11 @@ export function createDemoBall(): BallState {
 
 export function cloneBall(ball: BallState): BallState {
   return { ...ball }
+}
+
+function safeLog(f: number): number {
+  if (f <= 0) return -1e11
+  return Math.log(f)
 }
 
 export function stepBall(ball: BallState): BallState {
@@ -131,4 +160,155 @@ export function sampleTrajectory(initial: BallState, steps = 600): BallState[] {
     if (cur.status < 0) break
   }
   return out
+}
+
+export function applyShot(ball: BallState, shot: ShotSolution): BallState {
+  const next = cloneBall(ball)
+  next.vx = shot.vx
+  next.vy = shot.vy
+  next.vz = shot.vz
+  next.spin = shot.spin
+  if (next.status === 6) next.status = 4
+  else if (next.status === 7) next.status = 5
+  else if (next.status === 3) next.status = 0
+  else if (next.status === 1) next.status = 2
+  return next
+}
+
+export function tossForServe(side: 1 | -1): BallState {
+  return {
+    x: side > 0 ? 0.3 : -0.3,
+    y: side > 0 ? -TABLE.length / 2 : TABLE.length / 2,
+    z: TABLE.height + 0.15,
+    vx: 0,
+    vy: 0,
+    vz: 2.5,
+    spin: 0,
+    status: side > 0 ? 6 : 7,
+  }
+}
+
+export function solveTargetToV(
+  ball: BallState,
+  targetX: number,
+  targetY: number,
+  level: number,
+  spin: number,
+  vMin = 0.1,
+  vMax = 30.0,
+): ShotSolution {
+  let y: number
+  let vy = 0
+  let vz = 0
+  const vyMin = vMin
+  let vyMax = Math.abs(targetY - ball.y) / Math.hypot(targetX - ball.x, targetY - ball.y) * vMax
+
+  if (targetY < ball.y) {
+    y = -ball.y
+    targetY = -targetY
+  } else {
+    y = ball.y
+  }
+
+  if (targetY * y >= 0) {
+    vy = vyMax * level * 0.5
+    const t2 = -safeLog(1 - PHY * (targetY - y) / vy) / PHY
+    const vx = t2 !== 0 ? PHY * (targetX - ball.x) / (1 - Math.exp(-PHY * t2)) : ball.x
+    vz = t2 !== 0
+      ? (PHY * (TABLE.height - ball.z) + gravity(spin) * t2) / (1 - Math.exp(-PHY * t2)) - gravity(spin) / PHY
+      : ball.z
+    if (y !== ball.y) vy = -vy
+    return { vx, vy, vz, targetX, targetY: y !== ball.y ? -targetY : targetY, spin, level, isServe: false }
+  }
+
+  let lo = vyMin
+  let hi = vyMax
+  while (hi - lo > 0.001) {
+    vy = (lo + hi) / 2
+    const t2 = -safeLog(1 - PHY * (targetY - y) / vy) / PHY
+    const t1 = -safeLog(1 - PHY * (-y) / vy) / PHY
+    vz = t2 !== 0
+      ? (PHY * (TABLE.height - ball.z) + gravity(spin) * t2) / (1 - Math.exp(-PHY * t2)) - gravity(spin) / PHY
+      : ball.z
+    const z1 = -(vz + gravity(spin) / PHY) * Math.exp(-PHY * t1) / PHY - gravity(spin) * t1 / PHY + (vz + gravity(spin) / PHY) / PHY
+    if (z1 < TABLE.height + TABLE.netHeight - ball.z) hi = vy
+    else lo = vy
+  }
+
+  vy *= level
+  const t2 = -safeLog(1 - PHY * (targetY - y) / vy) / PHY
+  vz = t2 !== 0
+    ? (PHY * (TABLE.height - ball.z) + gravity(spin) * t2) / (1 - Math.exp(-PHY * t2)) - gravity(spin) / PHY
+    : ball.z
+  if (y !== ball.y) vy = -vy
+  const vx = PHY * (targetX - ball.x) / (1 - Math.exp(-PHY * t2))
+  return { vx, vy, vz, targetX, targetY: y !== ball.y ? -targetY : targetY, spin, level, isServe: false }
+}
+
+export function solveTargetToVS(
+  ball: BallState,
+  targetX: number,
+  targetY: number,
+  level: number,
+  spin: number,
+): ShotSolution {
+  let y: number
+  let tmpVX = 0, tmpVY = 0, tmpVZ = 0
+
+  if (targetY < ball.y) {
+    y = -ball.y
+    targetY = -targetY
+  } else {
+    y = ball.y
+  }
+
+  for (let boundY = -TABLE.length / 2; boundY < 0; boundY += TICK) {
+    let lo = 0.1
+    let hi = 30.0
+    let vyCurrent = 0
+    let vzCurrent = 0
+    let vy = 0
+    let vz = 0
+    let z = 0
+    let t1 = 0
+    let t2 = 0
+
+    while (hi - lo > 0.001) {
+      vy = (lo + hi) / 2
+      t2 = -safeLog(1 - PHY * (boundY - y) / vy) / PHY
+      vz = t2 !== 0
+        ? (PHY * (TABLE.height - ball.z) + gravity(spin) * t2) / (1 - Math.exp(-PHY * t2)) - gravity(spin) / PHY
+        : ball.z
+
+      vyCurrent = vy * Math.exp(-PHY * t2)
+      vzCurrent = (vz + gravity(spin) / PHY) * Math.exp(-PHY * t2) - gravity(spin) / PHY
+      vyCurrent += spin * 0.8
+      vzCurrent *= -TABLE_E
+
+      t1 = -safeLog(1 - PHY * (targetY - boundY) / vyCurrent) / PHY
+      z = -(vzCurrent + gravity(spin * 0.8) / PHY) * Math.exp(-PHY * t1) / PHY - gravity(spin * 0.8) / PHY * t1 + (vzCurrent + gravity(spin * 0.8) / PHY) / PHY
+
+      if (z > 0) hi = vy
+      else lo = vy
+    }
+
+    if (Math.abs(z) < TICK) {
+      const t3 = -safeLog(1 - PHY * (-boundY) / vyCurrent) / PHY
+      z = -(vzCurrent + gravity(spin * 0.8) / PHY) * Math.exp(-PHY * t3) / PHY - gravity(spin * 0.8) / PHY * t3 + (vzCurrent + gravity(spin * 0.8) / PHY) / PHY
+      if (z > TABLE.netHeight + (1.0 - level) * 0.1) {
+        if (vy > tmpVY) {
+          tmpVX = (t1 + t2) !== 0 ? PHY * (targetX - ball.x) / (1 - Math.exp(-PHY * (t1 + t2))) : 0
+          tmpVY = vy
+          tmpVZ = vz
+        }
+      }
+    }
+  }
+
+  const vy = y !== ball.y ? -tmpVY : tmpVY
+  return { vx: tmpVX, vy, vz: tmpVZ, targetX, targetY: y !== ball.y ? -targetY : targetY, spin, level, isServe: true }
+}
+
+export function findTableBounce(path: BallState[]): BallState | undefined {
+  return path.find((p, i) => i > 0 && Math.abs(p.z - TABLE.height) < 0.03 && Math.abs(p.x) <= TABLE.width / 2 && Math.abs(p.y) <= TABLE.length / 2)
 }
