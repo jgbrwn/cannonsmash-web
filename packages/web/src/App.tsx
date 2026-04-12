@@ -5,6 +5,7 @@ import {
   TICK,
   ARCHETYPES,
   applyShot,
+  buildStrokePlan,
   chooseAIReturnShot,
   createIdleBall,
   createNeutralBallForSide,
@@ -25,8 +26,10 @@ import {
   stepPlayer,
   tossForServe,
   type BallState,
+  type HandSide,
   type PlayerArchetype,
   type PlayerState,
+  type ShotFamily,
   type ShotSolution,
 } from '@csmash/core'
 
@@ -38,7 +41,7 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
-  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean } | null>(null)
+  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide } | null>(null)
   const ballRef = useRef<BallState>(createIdleBall())
   const playerRef = useRef<PlayerState>(createPlayer(1, 'PenAttack'))
   const opponentRef = useRef<PlayerState>(createPlayer(-1, 'ShakeCut'))
@@ -117,15 +120,25 @@ export default function App() {
           if (!aiPlanRef.current) {
             const choice = chooseAIReturnShot(nextOpponent, { ...nextBall })
             const planTicks = Math.max(1, (oppPlan?.etaTicks ?? 18) - 19)
-            aiPlanRef.current = { swingAt: planTicks, shot: choice.shot, attack: choice.attack }
-            nextMessage = choice.attack ? 'Opponent lines up an attack...' : 'Opponent reads the rally...'
+            aiPlanRef.current = {
+              swingAt: planTicks,
+              shot: choice.stroke.shot,
+              attack: choice.attack,
+              family: choice.stroke.family,
+              hand: choice.stroke.hand,
+            }
+            nextMessage = choice.attack
+              ? `Opponent lines up a ${choice.stroke.hand} ${choice.stroke.family}...`
+              : `Opponent reads a ${choice.stroke.hand} ${choice.stroke.family}...`
           }
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
             if (aiPlanRef.current.swingAt <= 0 && aiCooldownRef.current === 0) {
-              nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot)
+              nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot, aiPlanRef.current.family, aiPlanRef.current.hand)
               aiCooldownRef.current = 65
-              nextMessage = aiPlanRef.current.attack ? 'Opponent commits late to an attack!' : 'Opponent commits late to the return.'
+              nextMessage = aiPlanRef.current.attack
+                ? `Opponent commits late to a ${aiPlanRef.current.hand} attack!`
+                : `Opponent commits late to a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
               aiPlanRef.current = null
             }
           }
@@ -328,17 +341,17 @@ export default function App() {
       ? tossForServe(1)
       : ball.status === 8 ? createNeutralBallForSide(1) : { ...ball }
 
-    const shot = serveMode
-      ? solveTargetToVS(baseBall, target.x, target.y, nextLevel, spin)
-      : solveTargetToV(baseBall, target.x, target.y, nextLevel, spin)
+    const stroke = serveMode
+      ? { shot: solveTargetToVS(baseBall, target.x, target.y, nextLevel, spin), family: 'drive' as ShotFamily, hand: 'forehand' as HandSide }
+      : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
 
-    const nextPlayer = startSwing(playerRef.current, shot)
+    const nextPlayer = startSwing(playerRef.current, stroke.shot, stroke.family, stroke.hand)
     playerRef.current = nextPlayer
     ballRef.current = baseBall
-    setShotQueued(shot)
+    setShotQueued(stroke.shot)
     setPlayer(nextPlayer)
     setBall(baseBall)
-    setMessage(serveMode ? 'Serve swing started — move through the ball.' : 'Swing started — footwork assist engaged.')
+    setMessage(serveMode ? 'Serve swing started — move through the ball.' : `Swing started — ${stroke.hand} ${stroke.family}.`)
   }
 
   const resetIdle = () => {
@@ -384,8 +397,8 @@ export default function App() {
           <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
           <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)}</div>
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
-          <div>your swing: {player.swingState} @ {player.swingTimer}</div>
-          <div>opp swing: {opponent.swingState} @ {opponent.swingTimer}</div>
+          <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
+          <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
           <div>{message}</div>
         </div>
       </div>
@@ -433,7 +446,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Opponent shot choice now samples multiple target solutions via forward simulation, scores them by archetype/status context, and delays swing commitment until just before impact to better match the original's late-decision feel.
+            Stroke planning now distinguishes forehand/backhand and attack/drive/cut/block tendencies. Archetypes and ball context influence both the player stroke plan and the opponent's simulated return choices.
           </div>
         </div>
       </div>

@@ -317,6 +317,14 @@ export type PlayerSide = 1 | -1
 export type SwingState = 'idle' | 'backswing' | 'impact' | 'recovery'
 
 export type PlayerArchetype = 'PenAttack' | 'PenDrive' | 'ShakeCut'
+export type HandSide = 'forehand' | 'backhand'
+export type ShotFamily = 'attack' | 'drive' | 'cut' | 'block'
+
+export interface PlannedStroke {
+  shot: ShotSolution
+  family: ShotFamily
+  hand: HandSide
+}
 
 export interface PlayerState {
   side: PlayerSide
@@ -329,6 +337,8 @@ export interface PlayerState {
   swingTimer: number
   swingState: SwingState
   requestedShot: ShotSolution | null
+  plannedHand: HandSide
+  plannedFamily: ShotFamily
   lastImpactTimer: number | null
   status: number
   statusMax: number
@@ -360,7 +370,7 @@ export interface ImpactResult {
 }
 
 export interface AITargetChoice {
-  shot: ShotSolution
+  stroke: PlannedStroke
   score: number
   targetX: number
   targetY: number
@@ -455,6 +465,8 @@ export function createPlayer(side: PlayerSide, archetype: PlayerArchetype = 'Pen
     swingTimer: 0,
     swingState: 'idle',
     requestedShot: null,
+    plannedHand: 'forehand',
+    plannedFamily: 'drive',
     lastImpactTimer: null,
     status: profile.statusMax,
     statusMax: profile.statusMax,
@@ -486,7 +498,7 @@ export function recoverPlayerStatus(player: PlayerState, amount = 0.0028): Playe
   }
 }
 
-export function startSwing(player: PlayerState, shot: ShotSolution): PlayerState {
+export function startSwing(player: PlayerState, shot: ShotSolution, family: ShotFamily = 'drive', hand: HandSide = 'forehand'): PlayerState {
   if (player.swingState !== 'idle') return player
   const profile = getArchetypeProfile(player)
   return {
@@ -494,6 +506,8 @@ export function startSwing(player: PlayerState, shot: ShotSolution): PlayerState
     swingTimer: 1,
     swingState: 'backswing',
     requestedShot: shot,
+    plannedFamily: family,
+    plannedHand: hand,
     lastImpactTimer: null,
     status: clamp(player.status - profile.recoveryCost * 0.6, 0, player.statusMax),
   }
@@ -520,7 +534,7 @@ export function stepPlayer(player: PlayerState): PlayerState {
     return { ...moved, swingTimer: timer, swingState: 'impact', lastImpactTimer: timer }
   }
   if (timer >= 50) {
-    return recoverPlayerStatus({ ...moved, swingTimer: 0, swingState: 'idle', requestedShot: null, lastImpactTimer: null }, 0.01)
+    return recoverPlayerStatus({ ...moved, swingTimer: 0, swingState: 'idle', requestedShot: null, plannedFamily: 'drive', plannedHand: 'forehand', lastImpactTimer: null }, 0.01)
   }
   return { ...moved, swingTimer: timer, swingState: timer < 20 ? 'backswing' : 'recovery' }
 }
@@ -539,6 +553,52 @@ export function getPlayerContactMetrics(player: PlayerState, ball: BallState): C
   return { dx, dy, dz, distance, timingError, reachable }
 }
 
+export function getHandSideForBall(player: PlayerState, ball: BallState): HandSide {
+  const relativeX = player.side * (ball.x - player.x)
+  return relativeX >= 0 ? 'forehand' : 'backhand'
+}
+
+export function classifyShotFamily(player: PlayerState, ball: BallState, hand: HandSide, statusRatio = getStatusRatio(player)): ShotFamily {
+  const attackable = isAttackableBall(ball, player.side)
+  if (attackable && hand === 'forehand' && statusRatio > 0.38) {
+    return player.archetype === 'ShakeCut' ? 'drive' : 'attack'
+  }
+  if (player.archetype === 'ShakeCut') {
+    return ball.z > TABLE.height + 0.26 && statusRatio > 0.45 ? 'block' : 'cut'
+  }
+  if (player.archetype === 'PenDrive') {
+    return hand === 'forehand' ? 'drive' : 'block'
+  }
+  return hand === 'backhand' && statusRatio < 0.42 ? 'block' : 'drive'
+}
+
+export function buildStrokePlan(player: PlayerState, ball: BallState, targetX: number, targetY: number, level: number, spin: number, isServe = false): PlannedStroke {
+  const hand = getHandSideForBall(player, ball)
+  const family = classifyShotFamily(player, ball, hand)
+  let nextLevel = level
+  let nextSpin = spin
+
+  if (family === 'attack') {
+    nextLevel += 0.12 + Math.max(0, getArchetypeProfile(player).powerBias * 0.6)
+    nextSpin += 0.08
+  } else if (family === 'drive') {
+    nextLevel += 0.04
+    nextSpin += player.archetype === 'PenDrive' ? 0.14 : 0.06
+  } else if (family === 'cut') {
+    nextLevel -= 0.12
+    nextSpin -= 0.24
+  } else if (family === 'block') {
+    nextLevel -= 0.06
+    nextSpin -= 0.06
+  }
+
+  const shot = isServe
+    ? solveTargetToVS(ball, targetX, targetY, clamp(nextLevel, 0.35, 1), clamp(nextSpin, -1.2, 1.2))
+    : solveTargetToV(ball, targetX, targetY, clamp(nextLevel, 0.35, 1), clamp(nextSpin, -1.2, 1.2))
+
+  return { shot, family, hand }
+}
+
 function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
@@ -548,19 +608,22 @@ function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSol
   const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7 - fatiguePenalty * 0.45
   if (!metrics.reachable || quality < 0.16) return null
 
+  const familyPower = player.plannedFamily === 'attack' ? 0.12 : player.plannedFamily === 'drive' ? 0.04 : player.plannedFamily === 'cut' ? -0.12 : -0.05
+  const familySpin = player.plannedFamily === 'attack' ? 0.08 : player.plannedFamily === 'drive' ? 0.1 : player.plannedFamily === 'cut' ? -0.22 : -0.04
+  const handError = player.plannedHand === 'backhand' ? 0.05 : -0.01
   const errorScale = fatiguePenalty * 0.32
   const adjustedTargetX = clamp(
-    shot.targetX + metrics.dx * (0.75 + errorScale) + metrics.timingError * 0.16 + profile.powerBias * 0.08,
+    shot.targetX + metrics.dx * (0.75 + errorScale) + metrics.timingError * (0.16 + handError) + profile.powerBias * 0.08,
     -TABLE.width / 2 + 0.04,
     TABLE.width / 2 - 0.04,
   )
   const adjustedTargetY = clamp(
-    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1) + profile.powerBias * 0.16,
+    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1) + profile.powerBias * 0.16 + familyPower * 0.12,
     shot.targetY >= 0 ? 0.08 : -TABLE.length / 2 + 0.08,
     shot.targetY >= 0 ? TABLE.length / 2 - 0.08 : -0.08,
   )
-  const adjustedLevel = clamp(shot.level + profile.powerBias - timingPenalty * 0.18 - distancePenalty * 0.1 - fatiguePenalty * 0.18, 0.38, 1)
-  const adjustedSpin = clamp(shot.spin + profile.spinBias - metrics.timingError * 0.9 - metrics.dx * 0.8 - fatiguePenalty * 0.15, -1.2, 1.2)
+  const adjustedLevel = clamp(shot.level + profile.powerBias + familyPower - timingPenalty * 0.18 - distancePenalty * 0.1 - fatiguePenalty * 0.18, 0.32, 1)
+  const adjustedSpin = clamp(shot.spin + profile.spinBias + familySpin - metrics.timingError * 0.9 - metrics.dx * 0.8 - fatiguePenalty * 0.15, -1.2, 1.2)
 
   return shot.isServe
     ? solveTargetToVS(ball, adjustedTargetX, adjustedTargetY, adjustedLevel, adjustedSpin)
@@ -658,9 +721,10 @@ function isAttackableBall(ball: BallState, side: PlayerSide): boolean {
   return ball.z > TABLE.height + 0.34 && ((side === 1 && ball.y < -0.2) || (side === -1 && ball.y > 0.2))
 }
 
-function evaluateAIReturn(player: PlayerState, shot: ShotSolution, attack: boolean): number {
+function evaluateAIReturn(player: PlayerState, stroke: PlannedStroke, attack: boolean): number {
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
+  const shot = stroke.shot
   const widthPressure = Math.abs(shot.targetX) / (TABLE.width / 2)
   const depthPressure = Math.abs(shot.targetY) / (TABLE.length / 2)
   const pace = shot.level
@@ -668,6 +732,9 @@ function evaluateAIReturn(player: PlayerState, shot: ShotSolution, attack: boole
   let score = widthPressure * 0.55 + depthPressure * 0.45 + pace * 0.5 + spinValue * 0.16
   if (attack) score += 0.22 + profile.powerBias * 0.6
   else score += profile.spinBias > 0 ? 0.04 : 0.08
+  if (stroke.family === 'attack') score += 0.16
+  if (stroke.family === 'cut') score += player.archetype === 'ShakeCut' ? 0.18 : -0.08
+  if (stroke.hand === 'backhand') score -= player.archetype === 'PenDrive' ? 0.12 : 0.05
   score += statusRatio * 0.18
   score -= (1 - statusRatio) * (attack ? 0.26 : 0.08)
   return score
@@ -696,19 +763,20 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState): AITarg
     for (const targetY of ys) {
       for (const spin of spins) {
         for (const level of levels) {
-          const shot = solveTargetToV(ball, targetX, targetY, clamp(level - (1 - statusRatio) * 0.14, 0.4, 1), clamp(spin, -1.2, 1.2))
-          const path = sampleTrajectory(applyShot(ball, shot), 200)
+          const stroke = buildStrokePlan(player, ball, targetX, targetY, clamp(level - (1 - statusRatio) * 0.14, 0.4, 1), clamp(spin, -1.2, 1.2))
+          const path = sampleTrajectory(applyShot(ball, stroke.shot), 200)
           const bounce = findTableBounce(path)
           if (!bounce) continue
           const sameSide = side > 0 ? bounce.y < 0 : bounce.y > 0
           if (sameSide) continue
-          const score = evaluateAIReturn(player, shot, attack)
-          if (!best || score > best.score) best = { shot, score, targetX, targetY, attack }
+          const score = evaluateAIReturn(player, stroke, attack)
+          if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack }
         }
       }
     }
   }
 
   if (best) return best
-  return { shot: createSimpleReturnShot(ball, side, player.archetype, statusRatio), score: -1, targetX: 0, targetY: lane * TABLE.length * 0.24, attack: false }
+  const fallback = buildStrokePlan(player, ball, 0, lane * TABLE.length * 0.24, 0.66, profile.spinBias)
+  return { stroke: fallback, score: -1, targetX: 0, targetY: lane * TABLE.length * 0.24, attack: false }
 }
