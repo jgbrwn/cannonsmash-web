@@ -21,8 +21,6 @@ import {
   resolveImpact,
   sampleTrajectory,
   setPlayerTarget,
-  solveTargetToV,
-  solveTargetToVS,
   startSwing,
   stepBall,
   stepPlayer,
@@ -44,6 +42,11 @@ type MatchState = {
   servesUsed: number
   gameOver: boolean
   winner: 'you' | 'opp' | null
+  games: { you: number; opp: number }
+  gameNumber: number
+  matchOver: boolean
+  matchWinner: 'you' | 'opp' | null
+  sidesSwapped: boolean
 }
 
 export default function App() {
@@ -68,32 +71,43 @@ export default function App() {
   const [lastShot, setLastShot] = useState<ShotSolution | null>(null)
   const [shotQueued, setShotQueued] = useState<ShotSolution | null>(null)
   const [score, setScore] = useState({ you: 0, opp: 0 })
-  const [match, setMatch] = useState<MatchState>({ server: 1, servesUsed: 0, gameOver: false, winner: null })
+  const [match, setMatch] = useState<MatchState>({
+    server: 1,
+    servesUsed: 0,
+    gameOver: false,
+    winner: null,
+    games: { you: 0, opp: 0 },
+    gameNumber: 1,
+    matchOver: false,
+    matchWinner: null,
+    sidesSwapped: false,
+  })
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
 
-  const isYourServe = match.server === 1
+  const displayYouSide = match.sidesSwapped ? -1 : 1
+  const isYourServe = match.server === displayYouSide
   const effectiveServeMode = serveMode || ball.status === 8
 
   useEffect(() => { ballRef.current = ball }, [ball])
   useEffect(() => { playerRef.current = player }, [player])
   useEffect(() => { opponentRef.current = opponent }, [opponent])
   useEffect(() => {
-    const nextPlayer = createPlayer(1, playerArchetype)
+    const nextPlayer = createPlayer(displayYouSide, playerArchetype)
     playerRef.current = nextPlayer
     setPlayer(nextPlayer)
-  }, [playerArchetype])
+  }, [playerArchetype, displayYouSide])
   useEffect(() => {
-    const nextOpponent = createPlayer(-1, oppArchetype)
+    const nextOpponent = createPlayer(-displayYouSide as 1 | -1, oppArchetype)
     opponentRef.current = nextOpponent
     setOpponent(nextOpponent)
-  }, [oppArchetype])
+  }, [oppArchetype, displayYouSide])
 
   const predicted = useMemo(() => sampleTrajectory(ball, 260), [ball])
   const landing = useMemo(() => findTableBounce(predicted), [predicted])
   const playerContact = useMemo(() => getPlayerContactMetrics(player, ball), [player, ball])
   const playerHand = useMemo(() => getHandSideForBall(player, ball), [player, ball])
-  const contactPrediction = useMemo(() => predictContactPoint(ball, 1, 180, playerHand), [ball, playerHand])
-  const opponentPrediction = useMemo(() => predictContactPoint(ball, -1, 180, getHandSideForBall(opponent, ball)), [ball, opponent])
+  const contactPrediction = useMemo(() => predictContactPoint(ball, player.side, 180, playerHand), [ball, playerHand, player.side])
+  const opponentPrediction = useMemo(() => predictContactPoint(ball, opponent.side, 180, getHandSideForBall(opponent, ball)), [ball, opponent])
   const playerStatusRatio = useMemo(() => getStatusRatio(player), [player])
   const oppStatusRatio = useMemo(() => getStatusRatio(opponent), [opponent])
 
@@ -110,8 +124,10 @@ export default function App() {
       let clearQueuedShot = false
 
       if (nextBall.status < 0 && ballRef.current.status >= 0) {
-        const oppWon = ballRef.current.status === 3 || ballRef.current.status === 4 || ballRef.current.status === 6
+        const playerMissSide = ballRef.current.status === 3 || ballRef.current.status === 4 || ballRef.current.status === 6
+        const oppWon = playerMissSide ? player.side > 0 : player.side < 0
         let nextScore = score
+        let pointMessage = ''
         setScore((s) => {
           nextScore = oppWon ? { ...s, opp: s.opp + 1 } : { ...s, you: s.you + 1 }
           return nextScore
@@ -120,24 +136,49 @@ export default function App() {
           const totalPoints = nextScore.you + nextScore.opp
           const gameOver = (nextScore.you >= 11 || nextScore.opp >= 11) && Math.abs(nextScore.you - nextScore.opp) >= 2
           const winner = gameOver ? (nextScore.you > nextScore.opp ? 'you' : 'opp') : null
+          const nextGames = gameOver
+            ? winner === 'you'
+              ? { ...m.games, you: m.games.you + 1 }
+              : { ...m.games, opp: m.games.opp + 1 }
+            : m.games
+          const matchOver = nextGames.you >= 3 || nextGames.opp >= 3
+          const matchWinner = matchOver ? (nextGames.you > nextGames.opp ? 'you' : 'opp') : null
+          const nextGameNumber = gameOver ? m.gameNumber + 1 : m.gameNumber
+          const nextSidesSwapped = gameOver ? !m.sidesSwapped : m.sidesSwapped
           const rotation = totalPoints >= 20 ? totalPoints : Math.floor(totalPoints / 2)
-          const nextServer = gameOver ? m.server : (rotation % 2 === 0 ? 1 : -1)
-          return { server: nextServer, servesUsed: totalPoints >= 20 ? totalPoints % 2 : totalPoints % 2, gameOver, winner }
+          const nextServer = gameOver ? (nextSidesSwapped ? -1 : 1) : (rotation % 2 === 0 ? displayYouSide : (-displayYouSide as 1 | -1))
+          pointMessage = matchPointMessage(nextScore, nextGames, oppWon, matchOver)
+          return {
+            server: nextServer,
+            servesUsed: gameOver ? 0 : (totalPoints >= 20 ? totalPoints % 2 : totalPoints % 2),
+            gameOver,
+            winner,
+            games: nextGames,
+            gameNumber: nextGameNumber,
+            matchOver,
+            matchWinner,
+            sidesSwapped: nextSidesSwapped,
+          }
         })
         aiCooldownRef.current = 0
-        nextMessage = gamePointMessage(nextScore, oppWon)
+        nextMessage = pointMessage
         nextBall = createIdleBall()
-        nextPlayer = createPlayer(1, playerArchetype)
-        nextOpponent = createPlayer(-1, oppArchetype)
+        const pointEndedGame = (nextScore.you >= 11 || nextScore.opp >= 11) && Math.abs(nextScore.you - nextScore.opp) >= 2
+        const nextDisplaySide = pointEndedGame ? (-displayYouSide as 1 | -1) : displayYouSide
+        nextPlayer = createPlayer(nextDisplaySide, playerArchetype)
+        nextOpponent = createPlayer(-nextDisplaySide as 1 | -1, oppArchetype)
         aiPlanRef.current = null
         clearQueuedShot = true
       } else {
-        const playerPlan = predictContactPoint(nextBall, 1)
+        const playerPlan = predictContactPoint(nextBall, player.side)
         const oppPlan = pickAIMoveTarget(nextOpponent, nextBall)
 
         if (ballRef.current.status === 8) {
-          if (match.server === -1 && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
-            const serveBall = tossForServe(-1)
+          if (match.server === opponent.side && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
+            if (match.gameOver && !match.matchOver) {
+              setMatch((m) => ({ ...m, gameOver: false, winner: null }))
+            }
+            const serveBall = tossForServe(opponent.side)
             const serveChoice = chooseAIReturnShot(nextOpponent, serveBall)
             nextBall = serveBall
             nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand)
@@ -155,7 +196,7 @@ export default function App() {
           nextOpponent = setPlayerTarget(nextOpponent, oppPlan.playerX, oppPlan.playerY, getHandSideForBall(nextOpponent, oppPlan.ball))
         }
 
-        if (isBallHittableForSide(nextBall, -1) && nextOpponent.swingState === 'idle') {
+        if (isBallHittableForSide(nextBall, opponent.side) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
             const choice = chooseAIReturnShot(nextOpponent, { ...nextBall })
             const lateDecision = choice.context === 'rally' ? 19 : choice.context === 'opener' ? 16 : 12
@@ -191,7 +232,7 @@ export default function App() {
               aiPlanRef.current = null
             }
           }
-        } else if (!isBallHittableForSide(nextBall, -1)) {
+        } else if (!isBallHittableForSide(nextBall, opponent.side)) {
           aiPlanRef.current = null
         }
 
@@ -390,22 +431,25 @@ export default function App() {
   }, [ball, predicted, landing, target, player, opponent])
 
   const queueShot = (nextLevel = level) => {
-    if (match.gameOver) {
-      setMessage(`Game over — ${match.winner === 'you' ? 'you win' : 'opponent wins'}. Reset to play again.`)
+    if (match.matchOver) {
+      setMessage(`Match over — ${match.matchWinner === 'you' ? 'you win' : 'opponent wins'}. Reset to play again.`)
       return
+    }
+    if (match.gameOver && ball.status === 8) {
+      setMatch((m) => ({ ...m, gameOver: false, winner: null }))
     }
     if (ball.status === 8 && !isYourServe) {
       setMessage('Waiting for opponent serve.')
       return
     }
-    if (!effectiveServeMode && !isBallHittableForSide(ball, 1) && ball.status !== 8) {
+    if (!effectiveServeMode && !isBallHittableForSide(ball, player.side) && ball.status !== 8) {
       setMessage('Ball not on your side yet.')
       return
     }
 
     const baseBall = effectiveServeMode
-      ? tossForServe(1)
-      : ball.status === 8 ? createNeutralBallForSide(1) : { ...ball }
+      ? tossForServe(player.side)
+      : ball.status === 8 ? createNeutralBallForSide(player.side) : { ...ball }
 
     const stroke = effectiveServeMode
       ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
@@ -432,7 +476,17 @@ export default function App() {
     setPlayer(idlePlayer)
     setOpponent(idleOpponent)
     setScore({ you: 0, opp: 0 })
-    setMatch({ server: 1, servesUsed: 0, gameOver: false, winner: null })
+    setMatch({
+      server: 1,
+      servesUsed: 0,
+      gameOver: false,
+      winner: null,
+      games: { you: 0, opp: 0 },
+      gameNumber: 1,
+      matchOver: false,
+      matchWinner: null,
+      sidesSwapped: false,
+    })
     setLastShot(null)
     setShotQueued(null)
     setMessage('Reset match. You serve first.')
@@ -457,10 +511,12 @@ export default function App() {
 
       <div style={{ position: 'absolute', top: 16, left: 16, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12, minWidth: 290 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Cannon Smash Rally Prototype</div>
-        <div style={{ fontSize: 13, opacity: 0.9 }}>Swing timing + opponent return + point reset.</div>
+        <div style={{ fontSize: 13, opacity: 0.9 }}>Swing timing + opening play + multi-game match loop.</div>
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
-          <div>score: you {score.you} — {score.opp} opp</div>
-          <div>serve: {isYourServe ? 'you' : 'opp'} {match.gameOver ? '· game over' : ''}</div>
+          <div>games: you {match.games.you} — {match.games.opp} opp</div>
+          <div>game {match.gameNumber} · score: you {score.you} — {score.opp} opp</div>
+          <div>serve: {isYourServe ? 'you' : 'opp'} {match.matchOver ? '· match over' : match.gameOver ? '· game over' : ''}</div>
+          <div>ends: you are {player.side > 0 ? 'south' : 'north'}</div>
           <div>ball status: {ball.status}</div>
           <div>you: {player.archetype} · status {(playerStatusRatio * 100).toFixed(0)}%</div>
           <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
@@ -505,7 +561,7 @@ export default function App() {
           <button onClick={() => setRunning((v) => !v)} style={btnGhost}>{running ? 'Pause' : 'Resume'}</button>
         </div>
         {shotQueued && <div style={{ fontSize: 12, marginTop: 10, opacity: 0.9 }}>queued impact shot ready</div>}
-        {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>{isYourServe ? 'ready to serve' : 'waiting for opponent serve'}</div>}
+        {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>{match.matchOver ? 'match complete' : isYourServe ? 'ready to serve' : 'waiting for opponent serve'}</div>}
         {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
         {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
         {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s</div>}
@@ -517,7 +573,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Opening phases now split more cleanly: serves, receives, and first attacks use distinct AI timing and archetype-biased choices before settling into normal rally planning.
+            The prototype now runs as a lightweight best-of-five: games advance automatically, ends switch after each game, and opening phases still use distinct serve / receive / opener planning.
           </div>
         </div>
       </div>
@@ -529,9 +585,15 @@ const btn: React.CSSProperties = { padding: '10px 12px', borderRadius: 10, borde
 const btnGhost: React.CSSProperties = { padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.18)', background: 'transparent', color: 'white', fontWeight: 700 }
 const selectStyle: React.CSSProperties = { width: '100%', marginTop: 4, borderRadius: 8, padding: '6px 8px', background: 'rgba(255,255,255,0.08)', color: 'white', border: '1px solid rgba(255,255,255,0.14)' }
 
-function gamePointMessage(score: { you: number; opp: number }, oppWon: boolean): string {
+function matchPointMessage(
+  score: { you: number; opp: number },
+  games: { you: number; opp: number },
+  oppWon: boolean,
+  matchOver: boolean,
+): string {
   const gameOver = (score.you >= 11 || score.opp >= 11) && Math.abs(score.you - score.opp) >= 2
-  if (gameOver) return oppWon ? 'Game to opponent.' : 'Game to you.'
+  if (matchOver) return oppWon ? 'Match to opponent.' : 'Match to you.'
+  if (gameOver) return oppWon ? `Game to opponent. Games ${games.you}-${games.opp}. Ends switch.` : `Game to you. Games ${games.you}-${games.opp}. Ends switch.`
   return oppWon ? 'Point to opponent.' : 'Point to you.'
 }
 
