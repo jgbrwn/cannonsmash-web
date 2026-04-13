@@ -103,6 +103,8 @@ export default function App() {
   const [showMenu, setShowMenu] = useState(true)
   const [menuCollapsed, setMenuCollapsed] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
+  const [compactHud, setCompactHud] = useState(typeof window !== 'undefined' ? window.innerWidth < 700 : false)
+  const [showDebugHud, setShowDebugHud] = useState(false)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
   const serverSide = match.server === 'you' ? displayYouSide : (-displayYouSide as 1 | -1)
@@ -148,6 +150,12 @@ export default function App() {
   useEffect(() => {
     audioEnabledRef.current = soundEnabled
   }, [soundEnabled])
+
+  useEffect(() => {
+    const onResize = () => setCompactHud(window.innerWidth < 700)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   useEffect(() => {
     if (!running || showMenu) return
@@ -706,32 +714,42 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ position: 'absolute', top: 16, left: 16, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12, minWidth: 290, boxShadow: fxRef.current.flash > 0 ? `0 0 ${18 + fxRef.current.flash * 22}px rgba(126,215,255,${0.18 + fxRef.current.flash * 0.22})` : 'none' }}>
-        <div style={{ fontWeight: 700, marginBottom: 6 }}>Cannon Smash Rally Prototype</div>
-        <div style={{ fontSize: 13, opacity: 0.9 }}>Swing timing + opening play + multi-game match loop.</div>
+      <div style={{ position: 'absolute', top: 16, left: 16, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12, minWidth: compactHud ? 220 : 290, maxWidth: compactHud ? 260 : 340, boxShadow: fxRef.current.flash > 0 ? `0 0 ${18 + fxRef.current.flash * 22}px rgba(126,215,255,${0.18 + fxRef.current.flash * 0.22})` : 'none' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Cannon Smash Rally Prototype</div>
+            <div style={{ fontSize: 13, opacity: 0.9 }}>{compactHud ? 'Match HUD' : 'Swing timing + opening play + multi-game match loop.'}</div>
+          </div>
+          <button onClick={() => setShowDebugHud((v) => !v)} style={{ ...btnGhost, padding: '6px 8px', fontSize: 12 }}>{showDebugHud ? 'Less' : 'More'}</button>
+        </div>
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
           <div>games: you {match.games.you} — {match.games.opp} opp</div>
-          <div>game {match.gameNumber} · score: you {score.you} — {score.opp} opp</div>
+          <div>game {match.gameNumber} · {score.you}-{score.opp}</div>
           <div>serve: {isYourServe ? 'you' : 'opp'} {match.matchOver ? '· match over' : match.gameOver ? '· game over' : ''}</div>
-          <div>ends: you are {player.side > 0 ? 'south' : 'north'}{match.games.you === 2 && match.games.opp === 2 ? ' · decider' : ''}</div>
-          <div>ball status: {ball.status}</div>
-          <div>you: {player.archetype} · status {(playerStatusRatio * 100).toFixed(0)}%</div>
-          <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
-          <div>phase: {playerContext} · opening bias {assistOpeningBias ? 'on' : 'off'}</div>
-          <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
-          <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
-          <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
-          <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
-          <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
-          <div>your pressure: {player.plannedReceivePressure ?? 'none'}</div>
-          <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
-          <div>opp pressure: {opponent.plannedReceivePressure ?? 'none'}</div>
-          <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}</div>
+          <div>end: {player.side > 0 ? 'south' : 'north'}{match.games.you === 2 && match.games.opp === 2 ? ' · decider' : ''}</div>
+          <div>you: {player.archetype} · {(playerStatusRatio * 100).toFixed(0)}%</div>
+          <div>opp: {opponent.archetype} · {(oppStatusRatio * 100).toFixed(0)}%</div>
+          <div>phase: {playerContext}</div>
           <div>{message}</div>
+          {showDebugHud && (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
+              <div>ball status: {ball.status}</div>
+              <div>opening bias: {assistOpeningBias ? 'on' : 'off'}</div>
+              <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
+              <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
+              <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
+              <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
+              <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
+              <div>your pressure: {player.plannedReceivePressure ?? 'none'}</div>
+              <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
+              <div>opp pressure: {opponent.plannedReceivePressure ?? 'none'}</div>
+              <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}</div>
+            </div>
+          )}
         </div>
       </div>
 
-      <div style={{ position: 'absolute', top: 16, right: 16, width: 304, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
+      <div style={{ position: 'absolute', top: 16, right: 16, width: compactHud ? 272 : 304, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <div style={{ fontWeight: 700 }}>Aim / stroke</div>
           <button onClick={() => setMenuCollapsed((v) => !v)} style={{ ...btnGhost, padding: '6px 8px', fontSize: 12 }}>{menuCollapsed ? 'Menu' : 'Hide'}</button>
@@ -789,15 +807,21 @@ export default function App() {
         </div>}
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
           phase: {playerContext}<br />
-          serve type: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
-          receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? '—'}<br />
-          suggested: {openingPreview.hand} {openingPreview.family}{openingPreview.servePattern ? ` · ${openingPreview.servePattern}` : ''}<br />
-          manual: {defaultPreview.hand} {defaultPreview.family}
+          serve: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
+          suggested: {openingPreview.hand} {openingPreview.family}
         </div>
-        {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
-        {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
-        {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s</div>}
-        {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
+        {showDebugHud && (
+          <>
+            <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
+              receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? '—'}<br />
+              manual: {defaultPreview.hand} {defaultPreview.family}
+            </div>
+            {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
+            {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
+            {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s</div>}
+            {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
+          </>
+        )}
       </div>
 
       {match.transitionText && !match.matchOver && !showMenu && (
@@ -807,12 +831,12 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ position: 'absolute', inset: 'auto 16px 16px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <TouchPad label="Drag-to-aim" onChange={(v) => setTarget({ x: v.x * (TABLE.width / 2 - 0.08), y: ((v.y + 1) / 2) * (TABLE.length / 2 - 0.14) + 0.07 })} />
+      <div style={{ position: 'absolute', inset: 'auto 16px 16px 16px', display: 'grid', gridTemplateColumns: compactHud ? '1fr' : '1fr 1fr', gap: 12 }}>
+        <TouchPad label={compactHud ? 'Aim' : 'Drag-to-aim'} onChange={(v) => setTarget({ x: v.x * (TABLE.width / 2 - 0.08), y: ((v.y + 1) / 2) * (TABLE.length / 2 - 0.14) + 0.07 })} compact={compactHud} />
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Game feel now has simple placeholder audio too: hits, bounces, points, games, and matches fire lightweight sound hooks so the loop reads more clearly even before real assets exist.
+            The HUD is lighter on mobile now too: key match info stays visible up front, deeper diagnostics tuck behind a More/Less toggle, and the touch pad compacts on smaller screens.
           </div>
         </div>
       </div>
@@ -850,7 +874,7 @@ function buildBetweenGameMessage(
   return `${youWonGame ? 'You take the game.' : 'Opponent takes the game.'} Games ${games.you}-${games.opp}. Next: game ${nextGameNumber}, you start on the ${endText} end.${deciderText} Swing to continue.`
 }
 
-function TouchPad({ label, onChange }: { label: string; onChange: (v: Vec2) => void }) {
+function TouchPad({ label, onChange, compact = false }: { label: string; onChange: (v: Vec2) => void; compact?: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const [local, setLocal] = useState({ x: 0, y: 0, active: false })
 
@@ -872,12 +896,12 @@ function TouchPad({ label, onChange }: { label: string; onChange: (v: Vec2) => v
       onPointerMove={(e) => local.active && update(e.clientX, e.clientY)}
       onPointerUp={() => setLocal({ x: local.x, y: local.y, active: false })}
       onPointerCancel={() => setLocal({ x: local.x, y: local.y, active: false })}
-      style={{ position: 'relative', minHeight: 140, background: 'rgba(0,0,0,0.45)', borderRadius: 12, touchAction: 'none', overflow: 'hidden' }}
+      style={{ position: 'relative', minHeight: compact ? 116 : 140, background: 'rgba(0,0,0,0.45)', borderRadius: 12, touchAction: 'none', overflow: 'hidden' }}
     >
       <div style={{ position: 'absolute', top: 12, left: 12, fontWeight: 700 }}>{label}</div>
       <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center' }}>
-        <div style={{ width: 110, height: 110, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', position: 'relative' }}>
-          <div style={{ position: 'absolute', left: `calc(50% + ${local.x * 40}px - 14px)`, top: `calc(50% - ${local.y * 40}px - 14px)`, width: 28, height: 28, borderRadius: '50%', background: '#7ed7ff' }} />
+        <div style={{ width: compact ? 92 : 110, height: compact ? 92 : 110, borderRadius: '50%', border: '1px solid rgba(255,255,255,0.2)', position: 'relative' }}>
+          <div style={{ position: 'absolute', left: `calc(50% + ${local.x * (compact ? 32 : 40)}px - 14px)`, top: `calc(50% - ${local.y * (compact ? 32 : 40)}px - 14px)`, width: 28, height: 28, borderRadius: '50%', background: '#7ed7ff' }} />
         </div>
       </div>
     </div>
