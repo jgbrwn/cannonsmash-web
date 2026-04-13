@@ -97,6 +97,8 @@ export default function App() {
   const [assistOpeningBias, setAssistOpeningBias] = useState(true)
   const [liveServePattern, setLiveServePattern] = useState<ServePattern | null>(null)
   const [liveReceivePressure, setLiveReceivePressure] = useState<ReceivePressure | null>(null)
+  const [showMenu, setShowMenu] = useState(true)
+  const [menuCollapsed, setMenuCollapsed] = useState(false)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
   const serverSide = match.server === 'you' ? displayYouSide : (-displayYouSide as 1 | -1)
@@ -140,7 +142,7 @@ export default function App() {
   }, [ball, isYourServe, level, player, playerContext, player.side, spin, target.x, target.y])
 
   useEffect(() => {
-    if (!running) return
+    if (!running || showMenu) return
     const id = setInterval(() => {
       aiCooldownRef.current = Math.max(0, aiCooldownRef.current - 1)
 
@@ -508,6 +510,12 @@ export default function App() {
   }, [ball, predicted, landing, target, player, opponent])
 
   const queueShot = (nextLevel = level) => {
+    if (showMenu) {
+      setShowMenu(false)
+      setMenuCollapsed(true)
+      setMessage('Match started. Aim, then hold/release to swing.')
+      return
+    }
     if (match.matchOver) {
       setMessage(`Match over — ${match.matchWinner === 'you' ? 'you win' : 'opponent wins'}. Reset to play again.`)
       return
@@ -585,6 +593,10 @@ export default function App() {
     })
     setLastShot(null)
     setShotQueued(null)
+    setLiveServePattern(null)
+    setLiveReceivePressure(null)
+    setShowMenu(true)
+    setMenuCollapsed(false)
     setMessage('Reset match. You serve first.')
   }
 
@@ -604,6 +616,33 @@ export default function App() {
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative', color: 'white' }}>
       <div ref={mountRef} style={{ width: '100%', height: '100%' }} />
+
+      {!menuCollapsed && (
+        <div style={{ position: 'absolute', inset: '16px 16px auto 16px', padding: 18, background: 'rgba(0,0,0,0.72)', borderRadius: 18, border: '1px solid rgba(255,255,255,0.14)', zIndex: 6, maxWidth: 560 }}>
+          <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 8 }}>Cannon Smash Web Prototype</div>
+          <div style={{ fontSize: 14, lineHeight: 1.6, opacity: 0.92, marginBottom: 12 }}>
+            Faithful-ish mobile-friendly remake prototype with source-inspired ball sim, serve/receive/opening logic, archetype styles, and early match flow.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, fontSize: 13, lineHeight: 1.5, opacity: 0.92 }}>
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Controls</div>
+              <div>• drag to aim</div>
+              <div>• hold/release to swing</div>
+              <div>• opening bias can assist serve/receive phases</div>
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 4 }}>Match</div>
+              <div>• best of five games</div>
+              <div>• ends switch each game</div>
+              <div>• deciding game switches ends mid-game</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+            <button onClick={() => { setShowMenu(false); setMenuCollapsed(true); setMessage('Match started. Aim, then hold/release to swing.') }} style={btn}>Start match</button>
+            <button onClick={() => setMenuCollapsed((v) => !v)} style={btnGhost}>{menuCollapsed ? 'Show panel' : 'Hide panel'}</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ position: 'absolute', top: 16, left: 16, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12, minWidth: 290 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Cannon Smash Rally Prototype</div>
@@ -631,6 +670,11 @@ export default function App() {
       </div>
 
       <div style={{ position: 'absolute', top: 16, right: 16, width: 304, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ fontWeight: 700 }}>Aim / stroke</div>
+          <button onClick={() => setMenuCollapsed((v) => !v)} style={{ ...btnGhost, padding: '6px 8px', fontSize: 12 }}>{menuCollapsed ? 'Menu' : 'Hide'}</button>
+        </div>
+-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Aim / stroke</div>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Aim / stroke</div>
         <div style={{ fontSize: 12, marginBottom: 6 }}>Target X: {target.x.toFixed(2)}</div>
         <input type="range" min={-TABLE.width / 2 + 0.06} max={TABLE.width / 2 - 0.06} step={0.01} value={target.x} onChange={(e) => setTarget((t) => ({ ...t, x: Number(e.target.value) }))} style={{ width: '100%' }} />
@@ -661,12 +705,22 @@ export default function App() {
           Bias player openings by phase
         </label>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-          <button onPointerDown={pointerDownSwing} onPointerUp={pointerUpSwing} onPointerCancel={pointerUpSwing} style={btn}>Hold / release swing</button>
-          <button onClick={resetIdle} style={btnGhost}>Reset</button>
+          <button onPointerDown={pointerDownSwing} onPointerUp={pointerUpSwing} onPointerCancel={pointerUpSwing} style={btn}>{showMenu ? 'Start match' : 'Hold / release swing'}</button>
+          <button onClick={resetIdle} style={btnGhost}>{match.matchOver ? 'New match' : 'Reset'}</button>
           <button onClick={() => setRunning((v) => !v)} style={btnGhost}>{running ? 'Pause' : 'Resume'}</button>
         </div>
         {shotQueued && <div style={{ fontSize: 12, marginTop: 10, opacity: 0.9 }}>queued impact shot ready</div>}
-        {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>{match.matchOver ? 'match complete' : match.betweenGames ? 'between games — swing to continue' : isYourServe ? 'ready to serve' : 'waiting for opponent serve'}</div>}
+        {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>
+          {showMenu
+            ? 'open menu — press start match'
+            : match.matchOver
+              ? 'match complete'
+              : match.betweenGames
+                ? 'between games — swing to continue'
+                : isYourServe
+                  ? 'ready to serve'
+                  : 'waiting for opponent serve'}
+        </div>}
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
           phase: {playerContext}<br />
           serve type: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
@@ -680,7 +734,7 @@ export default function App() {
         {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
       </div>
 
-      {match.transitionText && !match.matchOver && (
+      {match.transitionText && !match.matchOver && !showMenu && (
         <div style={{ position: 'absolute', inset: '28% 24px auto 24px', padding: 18, background: 'rgba(0,0,0,0.68)', borderRadius: 16, border: '1px solid rgba(255,255,255,0.14)', textAlign: 'center', zIndex: 5 }}>
           <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>{match.winner === 'you' ? 'Game won' : 'Game lost'}</div>
           <div style={{ fontSize: 14, lineHeight: 1.5, opacity: 0.92 }}>{match.transitionText}</div>
@@ -692,7 +746,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Serve/opening structure is now sharper too: archetypes choose recognizable serve patterns, receives react to the live serve type, and opening attacks can lean into third-ball setups.
+            Presentation has been cleaned up too: there is now a simple start panel, clearer match start/reset affordances, and a less abrupt prototype-to-match transition.
           </div>
         </div>
       </div>
