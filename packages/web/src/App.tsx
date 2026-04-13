@@ -33,6 +33,7 @@ import {
   type PlayerState,
   type ShotFamily,
   type ShotSolution,
+  type ServePattern,
   type StrokeContext,
 } from '@csmash/core'
 
@@ -59,7 +60,7 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
-  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally' } | null>(null)
+  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean } | null>(null)
   const ballRef = useRef<BallState>(createIdleBall())
   const playerRef = useRef<PlayerState>(createPlayer(1, 'PenAttack'))
   const opponentRef = useRef<PlayerState>(createPlayer(-1, 'ShakeCut'))
@@ -93,6 +94,7 @@ export default function App() {
   })
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
   const [assistOpeningBias, setAssistOpeningBias] = useState(true)
+  const [liveServePattern, setLiveServePattern] = useState<ServePattern | null>(null)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
   const serverSide = match.server === 'you' ? displayYouSide : (-displayYouSide as 1 | -1)
@@ -126,8 +128,8 @@ export default function App() {
     const baseBall = ball.status === 8
       ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
       : ball
-    return buildOpeningStrokePlan(player, baseBall, target.x, target.y, playerContext)
-  }, [ball, isYourServe, player, playerContext, target.x, target.y])
+    return buildOpeningStrokePlan(player, baseBall, target.x, target.y, playerContext, liveServePattern ?? undefined)
+  }, [ball, isYourServe, liveServePattern, player, playerContext, target.x, target.y])
   const defaultPreview = useMemo(() => {
     const baseBall = ball.status === 8
       ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
@@ -201,6 +203,7 @@ export default function App() {
           }
         })
         aiCooldownRef.current = 0
+        setLiveServePattern(null)
         nextMessage = pointMessage
         nextBall = createIdleBall()
         nextPlayer = createPlayer(nextDisplaySide, playerArchetype)
@@ -223,10 +226,13 @@ export default function App() {
             const serveChoice = chooseAIReturnShot(nextOpponent, serveBall)
             nextBall = serveBall
             nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand)
+            setLiveServePattern(serveChoice.stroke.servePattern ?? null)
             aiCooldownRef.current = 80
-            nextMessage = serveChoice.stroke.family === 'cut'
-              ? 'Opponent opens with a spin-heavy serve...'
-              : 'Opponent begins the serve...'
+            nextMessage = serveChoice.stroke.servePattern === 'short-spin'
+              ? 'Opponent opens with a short spin serve...'
+              : serveChoice.stroke.servePattern === 'fast-long'
+                ? 'Opponent fires a fast long serve...'
+                : 'Opponent serves wide to set up the next ball...'
           }
         }
 
@@ -239,7 +245,7 @@ export default function App() {
 
         if (isBallHittableForSide(nextBall, opponent.side) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
-            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall })
+            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined)
             const lateDecision = choice.context === 'rally' ? 19 : choice.context === 'opener' ? 16 : 12
             const planTicks = Math.max(1, (oppPlan?.etaTicks ?? 18) - lateDecision)
             aiPlanRef.current = {
@@ -249,9 +255,11 @@ export default function App() {
               family: choice.stroke.family,
               hand: choice.stroke.hand,
               context: choice.context,
+              servePattern: choice.stroke.servePattern,
+              thirdBallAttack: choice.thirdBallAttack,
             }
             nextMessage = choice.context === 'receive'
-              ? `Opponent shapes a ${choice.stroke.family} receive...`
+              ? `Opponent shapes a ${choice.stroke.family} receive${liveServePattern ? ` vs ${liveServePattern}` : ''}...`
               : choice.context === 'opener'
                 ? `Opponent looks for a ${choice.stroke.family} opener...`
                 : choice.attack
@@ -266,7 +274,9 @@ export default function App() {
               nextMessage = aiPlanRef.current.context === 'receive'
                 ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
                 : aiPlanRef.current.context === 'opener'
-                  ? `Opponent jumps on the first attack!`
+                  ? aiPlanRef.current.thirdBallAttack
+                    ? 'Opponent jumps on the planned third-ball attack!'
+                    : 'Opponent jumps on the first attack!'
                   : aiPlanRef.current.attack
                     ? `Opponent commits late to a ${aiPlanRef.current.hand} attack!`
                     : `Opponent commits late to a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
@@ -285,8 +295,12 @@ export default function App() {
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
             nextLastShot = impact.shot
+            if (playerContext === 'serve') setLiveServePattern(openingPreview.servePattern ?? null)
+            else if (playerContext === 'receive') setLiveServePattern(null)
             nextMessage = impact.quality > 0.72
-              ? 'Clean contact.'
+              ? playerContext === 'serve' && openingPreview.servePattern
+                ? `Clean ${openingPreview.servePattern} serve.`
+                : 'Clean contact.'
               : impact.quality < 0.38
                 ? 'Fatigued contact.'
                 : impact.timingError > 0.05
@@ -305,8 +319,12 @@ export default function App() {
           nextOpponent = impact.player
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
+            if (aiPlanRef.current?.context === 'serve') setLiveServePattern(aiPlanRef.current.servePattern ?? null)
+            else if (aiPlanRef.current?.context === 'receive') setLiveServePattern(null)
             nextMessage = impact.quality > 0.72
-              ? 'Opponent times the return cleanly.'
+              ? aiPlanRef.current?.context === 'serve' && aiPlanRef.current.servePattern
+                ? `Opponent lands a ${aiPlanRef.current.servePattern} serve.`
+                : 'Opponent times the return cleanly.'
               : getStatusRatio(nextOpponent) < 0.3
                 ? 'Opponent lunges a tired return.'
                 : 'Opponent scrambles a return!'
@@ -497,7 +515,7 @@ export default function App() {
 
     const plannedContext = detectStrokeContext(playerRef.current, baseBall)
     const stroke = assistOpeningBias && plannedContext !== 'rally'
-      ? buildOpeningStrokePlan(playerRef.current, baseBall, target.x, target.y, plannedContext)
+      ? buildOpeningStrokePlan(playerRef.current, baseBall, target.x, target.y, plannedContext, liveServePattern ?? undefined)
       : effectiveServeMode
         ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
         : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
@@ -581,6 +599,7 @@ export default function App() {
           <div>you: {player.archetype} · status {(playerStatusRatio * 100).toFixed(0)}%</div>
           <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
           <div>phase: {playerContext} · opening bias {assistOpeningBias ? 'on' : 'off'}</div>
+          <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
           <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
@@ -629,7 +648,8 @@ export default function App() {
         {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>{match.matchOver ? 'match complete' : match.betweenGames ? 'between games — swing to continue' : isYourServe ? 'ready to serve' : 'waiting for opponent serve'}</div>}
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
           phase: {playerContext}<br />
-          suggested: {openingPreview.hand} {openingPreview.family}<br />
+          serve type: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
+          suggested: {openingPreview.hand} {openingPreview.family}{openingPreview.servePattern ? ` · ${openingPreview.servePattern}` : ''}<br />
           manual: {defaultPreview.hand} {defaultPreview.family}
         </div>
         {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
@@ -650,7 +670,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Match flow now pauses cleanly between games: you get a short transition banner with games score, changed ends, and decider warnings before the next serve begins.
+            Serve/opening structure is now sharper too: archetypes choose recognizable serve patterns, receives react to the live serve type, and opening attacks can lean into third-ball setups.
           </div>
         </div>
       </div>
