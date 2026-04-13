@@ -325,6 +325,7 @@ export interface PlannedStroke {
   family: ShotFamily
   hand: HandSide
   servePattern?: ServePattern
+  receivePressure?: ReceivePressure
 }
 
 export interface PlayerState {
@@ -375,6 +376,7 @@ export interface ImpactResult {
 
 export type StrokeContext = 'serve' | 'receive' | 'opener' | 'rally'
 export type ServePattern = 'short-spin' | 'fast-long' | 'wide-setup'
+export type ReceivePressure = 'low' | 'medium' | 'high'
 
 export interface AITargetChoice {
   stroke: PlannedStroke
@@ -635,6 +637,12 @@ function inferServePattern(player: PlayerState): ServePattern {
   return 'fast-long'
 }
 
+export function getReceivePressure(pattern?: ServePattern): ReceivePressure {
+  if (pattern === 'short-spin') return 'high'
+  if (pattern === 'wide-setup') return 'medium'
+  return 'low'
+}
+
 export function buildOpeningStrokePlan(
   player: PlayerState,
   ball: BallState,
@@ -652,6 +660,7 @@ export function buildOpeningStrokePlan(
   let spin = profile.spinBias
   let depthBias = context === 'serve' ? 0.18 : context === 'receive' ? 0.24 : 0.34
   let servePattern: ServePattern | undefined
+  let receivePressure: ReceivePressure | undefined
 
   if (context === 'serve') {
     servePattern = inferServePattern(player)
@@ -659,39 +668,40 @@ export function buildOpeningStrokePlan(
       family = 'drive'
       level += 0.05
       spin += 0.06
-      depthBias = 0.2
-      targetX = clamp(player.side * 0.34, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+      depthBias = 0.17
+      targetX = clamp(player.side * 0.5, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
     } else if (servePattern === 'fast-long') {
       family = 'drive'
-      level += 0.1
-      spin += 0.14
-      depthBias = 0.31
-      targetX = clamp(targetX * 0.45, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+      level += 0.18
+      spin += 0.1
+      depthBias = 0.4
+      targetX = clamp(targetX * 0.2, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
     } else {
       family = 'cut'
-      level -= 0.08
-      spin -= 0.34
-      depthBias = 0.14
-      targetX = clamp(-player.side * 0.16, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+      level -= 0.1
+      spin -= 0.42
+      depthBias = 0.11
+      targetX = clamp(-player.side * 0.14, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
     }
   } else if (context === 'receive') {
+    receivePressure = getReceivePressure(incomingServePattern)
     if (incomingServePattern === 'fast-long') {
       family = player.archetype === 'PenAttack' && hand === 'forehand' ? 'attack' : player.archetype === 'ShakeCut' ? 'block' : 'drive'
-      level += family === 'attack' ? 0.12 : 0.03
-      spin += family === 'attack' ? 0.02 : 0.08
-      depthBias = 0.33
+      level += family === 'attack' ? 0.16 : 0.05
+      spin += family === 'attack' ? 0.02 : 0.1
+      depthBias = 0.36
     } else if (incomingServePattern === 'short-spin') {
       family = player.archetype === 'ShakeCut' ? 'cut' : hand === 'backhand' ? 'block' : 'drive'
-      level -= 0.06
-      spin += family === 'cut' ? -0.24 : 0.04
-      depthBias = 0.2
-      targetX = clamp(targetX * 0.65, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+      level -= 0.12
+      spin += family === 'cut' ? -0.32 : 0.01
+      depthBias = 0.17
+      targetX = clamp(targetX * 0.55, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
     } else if (incomingServePattern === 'wide-setup') {
       family = player.archetype === 'PenDrive' ? 'drive' : player.archetype === 'ShakeCut' ? 'cut' : hand === 'forehand' ? 'attack' : 'drive'
-      level += family === 'attack' ? 0.09 : 0.01
-      spin += family === 'cut' ? -0.16 : 0.08
-      targetX = clamp(-targetX * 0.7, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
-      depthBias = 0.26
+      level += family === 'attack' ? 0.08 : -0.01
+      spin += family === 'cut' ? -0.18 : 0.06
+      targetX = clamp(-targetX * 0.9, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+      depthBias = 0.24
     } else if (player.archetype === 'ShakeCut') {
       family = hand === 'forehand' && ball.z > TABLE.height + 0.28 && statusRatio > 0.58 ? 'block' : 'cut'
       level -= 0.08
@@ -728,11 +738,45 @@ export function buildOpeningStrokePlan(
 
   const shapedTargetY = clamp(lane * TABLE.length * depthBias, lane > 0 ? 0.08 : -TABLE.length / 2 + 0.08, lane > 0 ? TABLE.length / 2 - 0.08 : -0.08)
   const useServeSolver = context === 'serve'
-  const shot = useServeSolver
+  const rawShot = useServeSolver
     ? solveTargetToVS(ball, targetX, shapedTargetY, clamp(level, 0.38, 0.92), clamp(spin, -1.2, 1.2))
     : solveTargetToV(ball, targetX, shapedTargetY, clamp(level, 0.38, 1), clamp(spin, -1.2, 1.2))
+  const shot = applyServePatternPhysics(rawShot, servePattern)
 
-  return { shot, family, hand, servePattern }
+  return { shot, family, hand, servePattern, receivePressure }
+}
+
+function applyServePatternPhysics(shot: ShotSolution, pattern?: ServePattern): ShotSolution {
+  if (!pattern || !shot.isServe) return shot
+  if (pattern === 'short-spin') {
+    return {
+      ...shot,
+      targetY: shot.targetY * 0.74,
+      level: clamp(shot.level - 0.1, 0.35, 0.82),
+      spin: clamp(shot.spin - 0.18, -1.2, 1.2),
+      vx: shot.vx * 0.88,
+      vy: shot.vy * 0.82,
+      vz: shot.vz * 0.94,
+    }
+  }
+  if (pattern === 'fast-long') {
+    return {
+      ...shot,
+      targetY: shot.targetY * 1.12,
+      level: clamp(shot.level + 0.08, 0.45, 1),
+      spin: clamp(shot.spin + 0.06, -1.2, 1.2),
+      vx: shot.vx * 0.96,
+      vy: shot.vy * 1.12,
+      vz: shot.vz * 1.02,
+    }
+  }
+  return {
+    ...shot,
+    targetX: clamp(shot.targetX * 1.16, -TABLE.width / 2 + 0.04, TABLE.width / 2 - 0.04),
+    targetY: shot.targetY * 0.86,
+    vx: shot.vx * 1.08,
+    vy: shot.vy * 0.9,
+  }
 }
 
 function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {

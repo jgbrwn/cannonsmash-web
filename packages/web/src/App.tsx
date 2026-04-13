@@ -31,6 +31,7 @@ import {
   type HandSide,
   type PlayerArchetype,
   type PlayerState,
+  type ReceivePressure,
   type ShotFamily,
   type ShotSolution,
   type ServePattern,
@@ -95,6 +96,7 @@ export default function App() {
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
   const [assistOpeningBias, setAssistOpeningBias] = useState(true)
   const [liveServePattern, setLiveServePattern] = useState<ServePattern | null>(null)
+  const [liveReceivePressure, setLiveReceivePressure] = useState<ReceivePressure | null>(null)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
   const serverSide = match.server === 'you' ? displayYouSide : (-displayYouSide as 1 | -1)
@@ -204,6 +206,7 @@ export default function App() {
         })
         aiCooldownRef.current = 0
         setLiveServePattern(null)
+        setLiveReceivePressure(null)
         nextMessage = pointMessage
         nextBall = createIdleBall()
         nextPlayer = createPlayer(nextDisplaySide, playerArchetype)
@@ -227,6 +230,7 @@ export default function App() {
             nextBall = serveBall
             nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand)
             setLiveServePattern(serveChoice.stroke.servePattern ?? null)
+            setLiveReceivePressure(null)
             aiCooldownRef.current = 80
             nextMessage = serveChoice.stroke.servePattern === 'short-spin'
               ? 'Opponent opens with a short spin serve...'
@@ -295,8 +299,13 @@ export default function App() {
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
             nextLastShot = impact.shot
-            if (playerContext === 'serve') setLiveServePattern(openingPreview.servePattern ?? null)
-            else if (playerContext === 'receive') setLiveServePattern(null)
+            if (playerContext === 'serve') {
+              setLiveServePattern(openingPreview.servePattern ?? null)
+              setLiveReceivePressure(null)
+            } else if (playerContext === 'receive') {
+              setLiveServePattern(null)
+              setLiveReceivePressure(openingPreview.receivePressure ?? null)
+            }
             nextMessage = impact.quality > 0.72
               ? playerContext === 'serve' && openingPreview.servePattern
                 ? `Clean ${openingPreview.servePattern} serve.`
@@ -319,8 +328,13 @@ export default function App() {
           nextOpponent = impact.player
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
-            if (aiPlanRef.current?.context === 'serve') setLiveServePattern(aiPlanRef.current.servePattern ?? null)
-            else if (aiPlanRef.current?.context === 'receive') setLiveServePattern(null)
+            if (aiPlanRef.current?.context === 'serve') {
+              setLiveServePattern(aiPlanRef.current.servePattern ?? null)
+              setLiveReceivePressure(null)
+            } else if (aiPlanRef.current?.context === 'receive') {
+              setLiveServePattern(null)
+              setLiveReceivePressure(choicePressure(aiPlanRef.current.family, liveServePattern))
+            }
             nextMessage = impact.quality > 0.72
               ? aiPlanRef.current?.context === 'serve' && aiPlanRef.current.servePattern
                 ? `Opponent lands a ${aiPlanRef.current.servePattern} serve.`
@@ -600,6 +614,7 @@ export default function App() {
           <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
           <div>phase: {playerContext} · opening bias {assistOpeningBias ? 'on' : 'off'}</div>
           <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
+          <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
           <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
@@ -649,6 +664,7 @@ export default function App() {
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
           phase: {playerContext}<br />
           serve type: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
+          receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? '—'}<br />
           suggested: {openingPreview.hand} {openingPreview.family}{openingPreview.servePattern ? ` · ${openingPreview.servePattern}` : ''}<br />
           manual: {defaultPreview.hand} {defaultPreview.family}
         </div>
@@ -740,4 +756,10 @@ function TouchPad({ label, onChange }: { label: string; onChange: (v: Vec2) => v
       </div>
     </div>
   )
+}
+
+function choicePressure(family: ShotFamily, servePattern: ServePattern | null): ReceivePressure {
+  if (servePattern === 'short-spin') return family === 'cut' || family === 'block' ? 'high' : 'medium'
+  if (servePattern === 'wide-setup') return family === 'attack' ? 'medium' : 'high'
+  return family === 'attack' ? 'low' : 'medium'
 }
