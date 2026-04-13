@@ -51,6 +51,8 @@ type MatchState = {
   matchWinner: 'you' | 'opp' | null
   sidesSwapped: boolean
   deciderSwitchDone: boolean
+  betweenGames: boolean
+  transitionText: string | null
 }
 
 export default function App() {
@@ -86,6 +88,8 @@ export default function App() {
     matchWinner: null,
     sidesSwapped: false,
     deciderSwitchDone: false,
+    betweenGames: false,
+    transitionText: null,
   })
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
   const [assistOpeningBias, setAssistOpeningBias] = useState(true)
@@ -174,6 +178,12 @@ export default function App() {
             : (rotation % 2 === 0 ? 'you' : 'opp')
           const nextGameNumber = gameOver ? m.gameNumber + 1 : m.gameNumber
           const nextDeciderSwitchDone = gameOver ? false : shouldSwitchMidGame ? true : m.deciderSwitchDone
+          const betweenGames = gameOver && !matchOver
+          const transitionText = gameOver && !matchOver
+            ? buildBetweenGameMessage(winner === 'you', nextGames, nextGameNumber, nextSidesSwapped, nextGames.you === 2 && nextGames.opp === 2)
+            : shouldSwitchMidGame
+              ? 'Deciding game: switch ends.'
+              : null
           pointMessage = matchPointMessage(nextScore, nextGames, oppWon, matchOver, shouldSwitchMidGame)
           return {
             server: nextServer,
@@ -186,6 +196,8 @@ export default function App() {
             matchWinner,
             sidesSwapped: nextSidesSwapped,
             deciderSwitchDone: nextDeciderSwitchDone,
+            betweenGames,
+            transitionText,
           }
         })
         aiCooldownRef.current = 0
@@ -201,7 +213,10 @@ export default function App() {
 
         if (ballRef.current.status === 8) {
           if (serverSide === opponent.side && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
-            if (match.gameOver && !match.matchOver) {
+            if (match.betweenGames) {
+              setMatch((m) => ({ ...m, betweenGames: false, gameOver: false, winner: null, transitionText: null }))
+              nextMessage = `Game ${match.gameNumber} start.`
+            } else if (match.gameOver && !match.matchOver) {
               setMatch((m) => ({ ...m, gameOver: false, winner: null }))
             }
             const serveBall = tossForServe(opponent.side)
@@ -461,7 +476,10 @@ export default function App() {
       setMessage(`Match over — ${match.matchWinner === 'you' ? 'you win' : 'opponent wins'}. Reset to play again.`)
       return
     }
-    if (match.gameOver && ball.status === 8) {
+    if (match.betweenGames && ball.status === 8) {
+      setMatch((m) => ({ ...m, betweenGames: false, gameOver: false, winner: null, transitionText: null }))
+      setMessage(`Game ${match.gameNumber} start — ${player.side > 0 ? 'south' : 'north'} end.`)
+    } else if (match.gameOver && ball.status === 8) {
       setMatch((m) => ({ ...m, gameOver: false, winner: null }))
     }
     if (ball.status === 8 && !isYourServe) {
@@ -526,6 +544,8 @@ export default function App() {
       matchWinner: null,
       sidesSwapped: false,
       deciderSwitchDone: false,
+      betweenGames: false,
+      transitionText: null,
     })
     setLastShot(null)
     setShotQueued(null)
@@ -606,7 +626,7 @@ export default function App() {
           <button onClick={() => setRunning((v) => !v)} style={btnGhost}>{running ? 'Pause' : 'Resume'}</button>
         </div>
         {shotQueued && <div style={{ fontSize: 12, marginTop: 10, opacity: 0.9 }}>queued impact shot ready</div>}
-        {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>{match.matchOver ? 'match complete' : isYourServe ? 'ready to serve' : 'waiting for opponent serve'}</div>}
+        {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>{match.matchOver ? 'match complete' : match.betweenGames ? 'between games — swing to continue' : isYourServe ? 'ready to serve' : 'waiting for opponent serve'}</div>}
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
           phase: {playerContext}<br />
           suggested: {openingPreview.hand} {openingPreview.family}<br />
@@ -618,12 +638,19 @@ export default function App() {
         {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
       </div>
 
+      {match.transitionText && !match.matchOver && (
+        <div style={{ position: 'absolute', inset: '28% 24px auto 24px', padding: 18, background: 'rgba(0,0,0,0.68)', borderRadius: 16, border: '1px solid rgba(255,255,255,0.14)', textAlign: 'center', zIndex: 5 }}>
+          <div style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>{match.winner === 'you' ? 'Game won' : 'Game lost'}</div>
+          <div style={{ fontSize: 14, lineHeight: 1.5, opacity: 0.92 }}>{match.transitionText}</div>
+        </div>
+      )}
+
       <div style={{ position: 'absolute', inset: 'auto 16px 16px 16px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <TouchPad label="Drag-to-aim" onChange={(v) => setTarget({ x: v.x * (TABLE.width / 2 - 0.08), y: ((v.y + 1) / 2) * (TABLE.length / 2 - 0.14) + 0.07 })} />
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Player-side guidance now mirrors the AI structure too: the HUD shows live phase detection plus a suggested opening stroke, and you can toggle whether queued player openings follow that phase bias automatically.
+            Match flow now pauses cleanly between games: you get a short transition banner with games score, changed ends, and decider warnings before the next serve begins.
           </div>
         </div>
       </div>
@@ -647,6 +674,18 @@ function matchPointMessage(
   if (gameOver) return oppWon ? `Game to opponent. Games ${games.you}-${games.opp}. Ends switch.` : `Game to you. Games ${games.you}-${games.opp}. Ends switch.`
   if (switchedEndsMidGame) return oppWon ? 'Point to opponent. Decider ends switch.' : 'Point to you. Decider ends switch.'
   return oppWon ? 'Point to opponent.' : 'Point to you.'
+}
+
+function buildBetweenGameMessage(
+  youWonGame: boolean,
+  games: { you: number; opp: number },
+  nextGameNumber: number,
+  sidesSwapped: boolean,
+  nextIsDecider: boolean,
+): string {
+  const endText = sidesSwapped ? 'north' : 'south'
+  const deciderText = nextIsDecider ? ' Deciding game next.' : ''
+  return `${youWonGame ? 'You take the game.' : 'Opponent takes the game.'} Games ${games.you}-${games.opp}. Next: game ${nextGameNumber}, you start on the ${endText} end.${deciderText} Swing to continue.`
 }
 
 function TouchPad({ label, onChange }: { label: string; onChange: (v: Vec2) => void }) {
