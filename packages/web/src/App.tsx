@@ -13,10 +13,12 @@ import {
   createPlayer,
   detectStrokeContext,
   findTableBounce,
+  getDecisionLeadTicks,
   getHandSideForBall,
   getPlayerContactMetrics,
   getPlayerStanceOffset,
   getStatusRatio,
+  getSwingImpactTick,
   isBallHittableForSide,
   pickAIMoveTarget,
   predictContactPoint,
@@ -97,6 +99,7 @@ export default function App() {
     transitionText: null,
   })
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
+  const [serveWindowHint, setServeWindowHint] = useState<string | null>(null)
   const [assistOpeningBias, setAssistOpeningBias] = useState(true)
   const [liveServePattern, setLiveServePattern] = useState<ServePattern | null>(null)
   const [liveReceivePressure, setLiveReceivePressure] = useState<ReceivePressure | null>(null)
@@ -226,6 +229,7 @@ export default function App() {
         aiCooldownRef.current = 0
         setLiveServePattern(null)
         setLiveReceivePressure(null)
+        setServeWindowHint(null)
         playTone(audioRef, audioEnabledRef, pointMessage.includes('Game to') ? 460 : pointMessage.includes('Match to') ? 620 : 360, pointMessage.includes('Game to') ? 0.12 : pointMessage.includes('Match to') ? 0.18 : 0.08, 'sawtooth', 0.018)
         if (pointMessage.includes('Game to') || pointMessage.includes('Match to')) {
           setTimeout(() => playTone(audioRef, audioEnabledRef, pointMessage.includes('Match to') ? 780 : 620, pointMessage.includes('Match to') ? 0.22 : 0.14, 'triangle', 0.016), 90)
@@ -251,7 +255,7 @@ export default function App() {
             const serveBall = tossForServe(opponent.side)
             const serveChoice = chooseAIReturnShot(nextOpponent, serveBall)
             nextBall = serveBall
-            nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand, serveChoice.stroke.servePattern ?? null, serveChoice.stroke.receivePressure ?? null)
+            nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand, serveChoice.stroke.servePattern ?? null, serveChoice.stroke.receivePressure ?? null, serveChoice.context)
             setLiveServePattern(serveChoice.stroke.servePattern ?? null)
             setLiveReceivePressure(null)
             aiCooldownRef.current = 80
@@ -273,8 +277,9 @@ export default function App() {
         if (isBallHittableForSide(nextBall, opponent.side) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
             const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined)
-            const lateDecision = choice.context === 'rally' ? 19 : choice.context === 'opener' ? 16 : 12
-            const planTicks = Math.max(1, (oppPlan?.etaTicks ?? 18) - lateDecision)
+            const lateDecision = getDecisionLeadTicks(choice.context, nextOpponent.archetype, choice.stroke.servePattern)
+            const impactTick = getSwingImpactTick(choice.context, choice.stroke.family)
+            const planTicks = Math.max(1, (oppPlan?.etaTicks ?? impactTick) - lateDecision)
             aiPlanRef.current = {
               swingAt: planTicks,
               shot: choice.stroke.shot,
@@ -296,7 +301,7 @@ export default function App() {
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
             if (aiPlanRef.current.swingAt <= 0 && aiCooldownRef.current === 0) {
-              nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot, aiPlanRef.current.family, aiPlanRef.current.hand, aiPlanRef.current.servePattern ?? null, liveReceivePressure)
+              nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot, aiPlanRef.current.family, aiPlanRef.current.hand, aiPlanRef.current.servePattern ?? null, liveReceivePressure, aiPlanRef.current.context)
               aiCooldownRef.current = aiPlanRef.current.context === 'rally' ? 65 : 54
               nextMessage = aiPlanRef.current.context === 'receive'
                 ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
@@ -616,11 +621,23 @@ export default function App() {
         ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
         : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
 
+    if (plannedContext === 'serve') {
+      setServeWindowHint(
+        stroke.servePattern === 'short-spin'
+          ? 'Serve window: keep the second bounce short and central.'
+          : stroke.servePattern === 'fast-long'
+            ? 'Serve window: drive deep through the middle lanes.'
+            : 'Serve window: keep the wide setup legal, not too close to the sideline.',
+      )
+    } else {
+      setServeWindowHint(null)
+    }
+
     if (match.gameOver && ball.status === 8) {
       setMessage(`Next game ready — you are now on the ${player.side > 0 ? 'south' : 'north'} end.`)
     }
 
-    const nextPlayer = startSwing(playerRef.current, stroke.shot, stroke.family, stroke.hand, stroke.servePattern ?? null, stroke.receivePressure ?? null)
+    const nextPlayer = startSwing(playerRef.current, stroke.shot, stroke.family, stroke.hand, stroke.servePattern ?? null, stroke.receivePressure ?? null, plannedContext)
     playerRef.current = nextPlayer
     ballRef.current = baseBall
     setShotQueued(stroke.shot)
@@ -665,6 +682,7 @@ export default function App() {
     setShotQueued(null)
     setLiveServePattern(null)
     setLiveReceivePressure(null)
+    setServeWindowHint(null)
     setShowMenu(true)
     setMenuCollapsed(false)
     setMessage('Reset match. You serve first.')
@@ -731,6 +749,7 @@ export default function App() {
           <div>opp: {opponent.archetype} · {(oppStatusRatio * 100).toFixed(0)}%</div>
           <div>phase: {playerContext}</div>
           <div>{message}</div>
+          {serveWindowHint && <div style={{ opacity: 0.82 }}>hint: {serveWindowHint}</div>}
           {showDebugHud && (
             <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
               <div>ball status: {ball.status}</div>
@@ -754,7 +773,6 @@ export default function App() {
           <div style={{ fontWeight: 700 }}>Aim / stroke</div>
           <button onClick={() => setMenuCollapsed((v) => !v)} style={{ ...btnGhost, padding: '6px 8px', fontSize: 12 }}>{menuCollapsed ? 'Menu' : 'Hide'}</button>
         </div>
--        <div style={{ fontWeight: 700, marginBottom: 8 }}>Aim / stroke</div>
         <div style={{ fontWeight: 700, marginBottom: 8 }}>Aim / stroke</div>
         <div style={{ fontSize: 12, marginBottom: 6 }}>Target X: {target.x.toFixed(2)}</div>
         <input type="range" min={-TABLE.width / 2 + 0.06} max={TABLE.width / 2 - 0.06} step={0.01} value={target.x} onChange={(e) => setTarget((t) => ({ ...t, x: Number(e.target.value) }))} style={{ width: '100%' }} />
@@ -809,6 +827,7 @@ export default function App() {
           phase: {playerContext}<br />
           serve: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
           suggested: {openingPreview.hand} {openingPreview.family}
+          {serveWindowHint ? <><br />hint: {serveWindowHint}</> : null}
         </div>
         {showDebugHud && (
           <>

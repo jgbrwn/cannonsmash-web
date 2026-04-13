@@ -341,6 +341,7 @@ export interface PlayerState {
   requestedShot: ShotSolution | null
   plannedHand: HandSide
   plannedFamily: ShotFamily
+  plannedContext: StrokeContext
   plannedServePattern: ServePattern | null
   plannedReceivePressure: ReceivePressure | null
   lastImpactTimer: number | null
@@ -482,6 +483,7 @@ export function createPlayer(side: PlayerSide, archetype: PlayerArchetype = 'Pen
     requestedShot: null,
     plannedHand: 'forehand',
     plannedFamily: 'drive',
+    plannedContext: 'rally',
     plannedServePattern: null,
     plannedReceivePressure: null,
     lastImpactTimer: null,
@@ -533,6 +535,7 @@ export function startSwing(
   hand: HandSide = 'forehand',
   servePattern: ServePattern | null = null,
   receivePressure: ReceivePressure | null = null,
+  context: StrokeContext = 'rally',
 ): PlayerState {
   if (player.swingState !== 'idle') return player
   const profile = getArchetypeProfile(player)
@@ -544,6 +547,7 @@ export function startSwing(
     requestedShot: shot,
     plannedFamily: family,
     plannedHand: hand,
+    plannedContext: context,
     plannedServePattern: servePattern,
     plannedReceivePressure: receivePressure,
     lastImpactTimer: null,
@@ -579,6 +583,7 @@ export function stepPlayer(player: PlayerState): PlayerState {
       requestedShot: null,
       plannedFamily: 'drive',
       plannedHand: 'forehand',
+      plannedContext: 'rally',
       plannedServePattern: null,
       plannedReceivePressure: null,
       lastImpactTimer: null,
@@ -662,6 +667,42 @@ function inferServePattern(player: PlayerState): ServePattern {
   if (player.archetype === 'ShakeCut') return 'short-spin'
   if (player.archetype === 'PenAttack') return 'wide-setup'
   return 'fast-long'
+}
+
+function getServeWindow(context: StrokeContext, pattern?: ServePattern): { minDepth: number; maxDepth: number; maxWidth: number } {
+  if (context !== 'serve') {
+    return { minDepth: 0.18, maxDepth: TABLE.length / 2 - 0.08, maxWidth: TABLE.width / 2 - 0.05 }
+  }
+  if (pattern === 'short-spin') {
+    return { minDepth: 0.13, maxDepth: 0.28, maxWidth: TABLE.width / 2 - 0.16 }
+  }
+  if (pattern === 'fast-long') {
+    return { minDepth: 0.34, maxDepth: TABLE.length / 2 - 0.12, maxWidth: TABLE.width / 2 - 0.12 }
+  }
+  return { minDepth: 0.18, maxDepth: 0.36, maxWidth: TABLE.width / 2 - 0.1 }
+}
+
+function clampPlannedLanding(targetX: number, targetY: number, context: StrokeContext, pattern?: ServePattern): { x: number; y: number } {
+  const lane = Math.sign(targetY || 1) || 1
+  const window = getServeWindow(context, pattern)
+  return {
+    x: clamp(targetX, -window.maxWidth, window.maxWidth),
+    y: clamp(targetY, lane * window.minDepth, lane * window.maxDepth),
+  }
+}
+
+export function getDecisionLeadTicks(context: StrokeContext, archetype: PlayerArchetype, pattern?: ServePattern): number {
+  if (context === 'serve') return pattern === 'fast-long' ? 8 : pattern === 'short-spin' ? 10 : 9
+  if (context === 'receive') return archetype === 'ShakeCut' ? 13 : 11
+  if (context === 'opener') return archetype === 'PenAttack' ? 15 : 17
+  return archetype === 'PenAttack' ? 19 : archetype === 'ShakeCut' ? 20 : 18
+}
+
+export function getSwingImpactTick(context: StrokeContext, family: ShotFamily = 'drive'): number {
+  if (context === 'serve') return family === 'cut' ? 17 : 16
+  if (context === 'receive') return family === 'attack' ? 19 : 18
+  if (context === 'opener') return family === 'attack' ? 21 : 20
+  return family === 'attack' ? 20 : 19
 }
 
 export function getReceivePressure(pattern?: ServePattern): ReceivePressure {
@@ -764,13 +805,17 @@ export function buildOpeningStrokePlan(
   }
 
   const shapedTargetY = clamp(lane * TABLE.length * depthBias, lane > 0 ? 0.08 : -TABLE.length / 2 + 0.08, lane > 0 ? TABLE.length / 2 - 0.08 : -0.08)
+  const clampedLanding = clampPlannedLanding(targetX, shapedTargetY, context, servePattern)
   const useServeSolver = context === 'serve'
   const rawShot = useServeSolver
-    ? solveTargetToVS(ball, targetX, shapedTargetY, clamp(level, 0.38, 0.92), clamp(spin, -1.2, 1.2))
-    : solveTargetToV(ball, targetX, shapedTargetY, clamp(level, 0.38, 1), clamp(spin, -1.2, 1.2))
+    ? solveTargetToVS(ball, clampedLanding.x, clampedLanding.y, clamp(level, 0.38, 0.9), clamp(spin, -1.2, 1.2))
+    : solveTargetToV(ball, clampedLanding.x, clampedLanding.y, clamp(level, 0.38, 1), clamp(spin, -1.2, 1.2))
   const shot = applyServePatternPhysics(rawShot, servePattern)
+  const legalShot = context === 'serve'
+    ? enforceServeWindow(shot, ball, servePattern)
+    : shot
 
-  return { shot, family, hand, servePattern, receivePressure }
+  return { shot: legalShot, family, hand, servePattern, receivePressure }
 }
 
 function applyServePatternPhysics(shot: ShotSolution, pattern?: ServePattern): ShotSolution {
@@ -778,32 +823,40 @@ function applyServePatternPhysics(shot: ShotSolution, pattern?: ServePattern): S
   if (pattern === 'short-spin') {
     return {
       ...shot,
-      targetY: shot.targetY * 0.74,
-      level: clamp(shot.level - 0.1, 0.35, 0.82),
-      spin: clamp(shot.spin - 0.18, -1.2, 1.2),
-      vx: shot.vx * 0.88,
-      vy: shot.vy * 0.82,
-      vz: shot.vz * 0.94,
+      targetX: clamp(shot.targetX * 0.82, -TABLE.width / 2 + 0.12, TABLE.width / 2 - 0.12),
+      targetY: shot.targetY * 0.8,
+      level: clamp(shot.level - 0.08, 0.35, 0.8),
+      spin: clamp(shot.spin - 0.2, -1.2, 1.2),
+      vx: shot.vx * 0.84,
+      vy: shot.vy * 0.8,
+      vz: shot.vz * 0.93,
     }
   }
   if (pattern === 'fast-long') {
     return {
       ...shot,
-      targetY: shot.targetY * 1.12,
-      level: clamp(shot.level + 0.08, 0.45, 1),
-      spin: clamp(shot.spin + 0.06, -1.2, 1.2),
-      vx: shot.vx * 0.96,
-      vy: shot.vy * 1.12,
-      vz: shot.vz * 1.02,
+      targetX: clamp(shot.targetX * 0.68, -TABLE.width / 2 + 0.12, TABLE.width / 2 - 0.12),
+      targetY: shot.targetY * 1.04,
+      level: clamp(shot.level + 0.06, 0.45, 0.96),
+      spin: clamp(shot.spin + 0.04, -1.2, 1.2),
+      vx: shot.vx * 0.95,
+      vy: shot.vy * 1.08,
+      vz: shot.vz * 1.01,
     }
   }
   return {
     ...shot,
-    targetX: clamp(shot.targetX * 1.16, -TABLE.width / 2 + 0.04, TABLE.width / 2 - 0.04),
-    targetY: shot.targetY * 0.86,
-    vx: shot.vx * 1.08,
+    targetX: clamp(shot.targetX * 1.08, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08),
+    targetY: shot.targetY * 0.88,
+    vx: shot.vx * 1.04,
     vy: shot.vy * 0.9,
   }
+}
+
+function enforceServeWindow(shot: ShotSolution, ball: BallState, pattern?: ServePattern): ShotSolution {
+  if (!shot.isServe) return shot
+  const landing = clampPlannedLanding(shot.targetX, shot.targetY, 'serve', pattern)
+  return solveTargetToVS(ball, landing.x, landing.y, shot.level, shot.spin)
 }
 
 function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
@@ -976,11 +1029,17 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomin
   const thirdBallAttack = (context === 'serve' && player.archetype !== 'ShakeCut') || (context === 'opener' && player.archetype === 'PenAttack')
 
   if (context !== 'rally') {
-    const openerX = player.archetype === 'PenAttack'
-      ? side * 0.18
-      : player.archetype === 'PenDrive'
-        ? 0
-        : -side * 0.12
+    const openerX = context === 'serve'
+      ? player.archetype === 'PenAttack'
+        ? clamp(side * 0.42, -TABLE.width / 2 + 0.12, TABLE.width / 2 - 0.12)
+        : player.archetype === 'PenDrive'
+          ? 0
+          : clamp(-side * 0.12, -TABLE.width / 2 + 0.12, TABLE.width / 2 - 0.12)
+      : player.archetype === 'PenAttack'
+        ? side * 0.18
+        : player.archetype === 'PenDrive'
+          ? 0
+          : -side * 0.12
     const openerY = lane * TABLE.length * (context === 'serve' ? 0.18 : context === 'receive' ? 0.24 : 0.34)
     const stroke = buildOpeningStrokePlan(player, ball, openerX, openerY, context, incomingServePattern)
     return { stroke, score: evaluateAIReturn(player, stroke, attack, context, thirdBallAttack), targetX: openerX, targetY: openerY, attack, context, thirdBallAttack }
