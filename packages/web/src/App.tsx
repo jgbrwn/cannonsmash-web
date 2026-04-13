@@ -62,6 +62,7 @@ export default function App() {
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
   const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean } | null>(null)
+  const fxRef = useRef({ flash: 0, pulse: 0, bounce: 0, pulseColor: '#7ed7ff' })
   const ballRef = useRef<BallState>(createIdleBall())
   const playerRef = useRef<PlayerState>(createPlayer(1, 'PenAttack'))
   const opponentRef = useRef<PlayerState>(createPlayer(-1, 'ShakeCut'))
@@ -146,6 +147,7 @@ export default function App() {
     const id = setInterval(() => {
       aiCooldownRef.current = Math.max(0, aiCooldownRef.current - 1)
 
+      const prevBall = ballRef.current
       let nextBall = stepBall(ballRef.current)
       let nextPlayer = playerRef.current
       let nextOpponent = opponentRef.current
@@ -301,6 +303,9 @@ export default function App() {
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
             nextLastShot = impact.shot
+            fxRef.current.flash = 1
+            fxRef.current.pulse = 1
+            fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
             if (playerContext === 'serve') {
               setLiveServePattern(openingPreview.servePattern ?? null)
               setLiveReceivePressure(null)
@@ -332,6 +337,9 @@ export default function App() {
           nextOpponent = impact.player
           if (impact.madeContact && impact.shot) {
             nextBall = applyShot(nextBall, impact.shot)
+            fxRef.current.flash = 1
+            fxRef.current.pulse = 1
+            fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
             if (aiPlanRef.current?.context === 'serve') {
               setLiveServePattern(aiPlanRef.current.servePattern ?? null)
               setLiveReceivePressure(null)
@@ -354,6 +362,10 @@ export default function App() {
         }
       }
 
+      if (prevBall.status >= 0 && nextBall.status >= 0 && prevBall.status !== nextBall.status && (nextBall.status === 0 || nextBall.status === 1 || nextBall.status === 2 || nextBall.status === 3)) {
+        fxRef.current.bounce = 1
+      }
+
       ballRef.current = nextBall
       playerRef.current = nextPlayer
       opponentRef.current = nextOpponent
@@ -374,6 +386,7 @@ export default function App() {
     const scene = new THREE.Scene()
     scene.background = new THREE.Color(BG)
     scene.fog = new THREE.Fog(0x0f1115, 6, 18)
+    const impactColor = new THREE.Color('#7ed7ff')
 
     const camera = new THREE.PerspectiveCamera(60, el.clientWidth / el.clientHeight, 0.1, 50)
     camera.position.set(0, -4.7, 2.8)
@@ -438,6 +451,16 @@ export default function App() {
     shadow.rotation.x = -Math.PI / 2
     scene.add(shadow)
 
+    const impactFlash = new THREE.Mesh(new THREE.RingGeometry(0.04, 0.08, 32), new THREE.MeshBasicMaterial({ color: 0x7ed7ff, transparent: true, opacity: 0, side: THREE.DoubleSide }))
+    impactFlash.rotation.x = -Math.PI / 2
+    impactFlash.visible = false
+    scene.add(impactFlash)
+
+    const bounceFlash = new THREE.Mesh(new THREE.RingGeometry(0.03, 0.06, 32), new THREE.MeshBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0, side: THREE.DoubleSide }))
+    bounceFlash.rotation.x = -Math.PI / 2
+    bounceFlash.visible = false
+    scene.add(bounceFlash)
+
     const trajGeom = new THREE.BufferGeometry()
     const trajLine = new THREE.Line(trajGeom, new THREE.LineBasicMaterial({ color: 0xff6b6b }))
     scene.add(trajLine)
@@ -459,9 +482,15 @@ export default function App() {
 
     let raf = 0
     const loop = () => {
+      fxRef.current.flash = Math.max(0, fxRef.current.flash - 0.06)
+      fxRef.current.pulse = Math.max(0, fxRef.current.pulse - 0.045)
+      fxRef.current.bounce = Math.max(0, fxRef.current.bounce - 0.08)
+
       ballMesh.position.set(ball.x, ball.y, ball.z)
       shadow.position.set(ball.x, ball.y, 0.001)
-      shadow.scale.setScalar(1 + Math.max(0, ball.z - TABLE.height) * 0.35)
+      shadow.scale.setScalar(1 + Math.max(0, ball.z - TABLE.height) * 0.35 + fxRef.current.bounce * 0.45)
+      ;(ballMesh.material as THREE.MeshStandardMaterial).emissive.setRGB(0.27 + fxRef.current.flash * 0.35, 0.13 + fxRef.current.flash * 0.2, 0.0)
+      ballMesh.scale.setScalar(1 + fxRef.current.flash * 0.22)
 
       playerMesh.position.set(player.x, player.y, player.z)
       oppMesh.position.set(opponent.x, opponent.y, opponent.z)
@@ -489,6 +518,25 @@ export default function App() {
 
       targetRing.position.set(target.x, target.y, TABLE.height + 0.004)
       trajGeom.setFromPoints(predicted.map((p) => new THREE.Vector3(p.x, p.y, p.z)))
+
+      if (fxRef.current.pulse > 0) {
+        impactFlash.visible = true
+        impactFlash.position.set(ball.x, ball.y, TABLE.height + 0.008)
+        impactFlash.scale.setScalar(1 + fxRef.current.pulse * 2.6)
+        ;(impactFlash.material as THREE.MeshBasicMaterial).opacity = fxRef.current.pulse * 0.42
+        ;(impactFlash.material as THREE.MeshBasicMaterial).color.set(fxRef.current.pulseColor)
+      } else {
+        impactFlash.visible = false
+      }
+
+      if (fxRef.current.bounce > 0) {
+        bounceFlash.visible = true
+        bounceFlash.position.set(ball.x, ball.y, TABLE.height + 0.006)
+        bounceFlash.scale.setScalar(1 + fxRef.current.bounce * 2.2)
+        ;(bounceFlash.material as THREE.MeshBasicMaterial).opacity = fxRef.current.bounce * 0.32
+      } else {
+        bounceFlash.visible = false
+      }
       if (landing) {
         landingRing.visible = true
         landingRing.position.set(landing.x, landing.y, TABLE.height + 0.004)
@@ -644,7 +692,7 @@ export default function App() {
         </div>
       )}
 
-      <div style={{ position: 'absolute', top: 16, left: 16, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12, minWidth: 290 }}>
+      <div style={{ position: 'absolute', top: 16, left: 16, padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12, minWidth: 290, boxShadow: fxRef.current.flash > 0 ? `0 0 ${18 + fxRef.current.flash * 22}px rgba(126,215,255,${0.18 + fxRef.current.flash * 0.22})` : 'none' }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>Cannon Smash Rally Prototype</div>
         <div style={{ fontSize: 13, opacity: 0.9 }}>Swing timing + opening play + multi-game match loop.</div>
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
@@ -746,7 +794,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Presentation has been cleaned up too: there is now a simple start panel, clearer match start/reset affordances, and a less abrupt prototype-to-match transition.
+            Game feel has a bit more life now too: contacts flash, bounces pulse, and successful or strained impacts read more clearly in motion even before audio exists.
           </div>
         </div>
       </div>
