@@ -372,12 +372,15 @@ export interface ImpactResult {
   distance: number
 }
 
+export type StrokeContext = 'serve' | 'receive' | 'opener' | 'rally'
+
 export interface AITargetChoice {
   stroke: PlannedStroke
   score: number
   targetX: number
   targetY: number
   attack: boolean
+  context: StrokeContext
 }
 
 export interface ArchetypeProfile {
@@ -616,6 +619,90 @@ export function buildStrokePlan(player: PlayerState, ball: BallState, targetX: n
   return { shot, family, hand }
 }
 
+function detectStrokeContext(player: PlayerState, ball: BallState): StrokeContext {
+  if (ball.status === 6 || ball.status === 7) return 'serve'
+  if (ball.status === 1 || ball.status === 3) return 'receive'
+  if ((player.side === 1 && ball.status === 2) || (player.side === -1 && ball.status === 0)) return 'opener'
+  return 'rally'
+}
+
+function buildOpeningStrokePlan(
+  player: PlayerState,
+  ball: BallState,
+  targetX: number,
+  targetY: number,
+  context: StrokeContext,
+): PlannedStroke {
+  const hand = getHandSideForBall(player, ball)
+  const profile = getArchetypeProfile(player)
+  const statusRatio = getStatusRatio(player)
+  const lane = player.side > 0 ? -1 : 1
+  let family: ShotFamily
+  let level = 0.66 + profile.powerBias * 0.35
+  let spin = profile.spinBias
+  let depthBias = context === 'serve' ? 0.18 : context === 'receive' ? 0.24 : 0.34
+
+  if (context === 'serve') {
+    if (player.archetype === 'PenAttack') {
+      family = 'drive'
+      level += 0.04
+      spin += 0.08
+      targetX = clamp(targetX * 0.75 + player.side * 0.14, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    } else if (player.archetype === 'PenDrive') {
+      family = 'drive'
+      level += 0.02
+      spin += 0.18
+      targetX = clamp(targetX * 0.65, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    } else {
+      family = 'cut'
+      level -= 0.08
+      spin -= 0.34
+      targetX = clamp(targetX * 0.55 - player.side * 0.1, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    }
+  } else if (context === 'receive') {
+    if (player.archetype === 'ShakeCut') {
+      family = hand === 'forehand' && ball.z > TABLE.height + 0.28 && statusRatio > 0.58 ? 'block' : 'cut'
+      level -= 0.08
+      spin -= 0.22
+      depthBias = 0.22
+    } else if (player.archetype === 'PenAttack') {
+      family = hand === 'forehand' && ball.z > TABLE.height + 0.32 && statusRatio > 0.52 ? 'attack' : 'drive'
+      level += family === 'attack' ? 0.1 : 0.02
+      spin += family === 'attack' ? 0.04 : 0.1
+    } else {
+      family = hand === 'backhand' ? 'block' : 'drive'
+      level += 0.03
+      spin += 0.12
+      targetX = clamp(targetX * 0.78, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    }
+  } else {
+    if (player.archetype === 'PenAttack') {
+      family = hand === 'forehand' && statusRatio > 0.42 ? 'attack' : 'drive'
+      level += family === 'attack' ? 0.14 : 0.04
+      spin += 0.08
+      depthBias = 0.38
+    } else if (player.archetype === 'PenDrive') {
+      family = 'drive'
+      level += 0.08
+      spin += 0.16
+      depthBias = 0.34
+    } else {
+      family = hand === 'forehand' && ball.z > TABLE.height + 0.3 && statusRatio > 0.48 ? 'block' : 'cut'
+      level -= 0.04
+      spin -= 0.26
+      depthBias = 0.28
+    }
+  }
+
+  const shapedTargetY = clamp(lane * TABLE.length * depthBias, lane > 0 ? 0.08 : -TABLE.length / 2 + 0.08, lane > 0 ? TABLE.length / 2 - 0.08 : -0.08)
+  const useServeSolver = context === 'serve'
+  const shot = useServeSolver
+    ? solveTargetToVS(ball, targetX, shapedTargetY, clamp(level, 0.38, 0.92), clamp(spin, -1.2, 1.2))
+    : solveTargetToV(ball, targetX, shapedTargetY, clamp(level, 0.38, 1), clamp(spin, -1.2, 1.2))
+
+  return { shot, family, hand }
+}
+
 function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
@@ -742,7 +829,7 @@ function isAttackableBall(ball: BallState, side: PlayerSide): boolean {
   return ball.z > TABLE.height + 0.34 && ((side === 1 && ball.y < -0.2) || (side === -1 && ball.y > 0.2))
 }
 
-function evaluateAIReturn(player: PlayerState, stroke: PlannedStroke, attack: boolean): number {
+function evaluateAIReturn(player: PlayerState, stroke: PlannedStroke, attack: boolean, context: StrokeContext): number {
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
   const shot = stroke.shot
@@ -756,6 +843,9 @@ function evaluateAIReturn(player: PlayerState, stroke: PlannedStroke, attack: bo
   if (stroke.family === 'attack') score += 0.16
   if (stroke.family === 'cut') score += player.archetype === 'ShakeCut' ? 0.18 : -0.08
   if (stroke.hand === 'backhand') score -= player.archetype === 'PenDrive' ? 0.12 : 0.05
+  if (context === 'serve') score += stroke.family === 'cut' ? 0.12 : 0.04
+  if (context === 'receive') score += stroke.family === 'block' || stroke.family === 'cut' ? 0.12 : 0
+  if (context === 'opener') score += stroke.family === 'attack' ? 0.14 : 0.05
   score += statusRatio * 0.18
   score -= (1 - statusRatio) * (attack ? 0.26 : 0.08)
   return score
@@ -766,7 +856,19 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState): AITarg
   const lane = side > 0 ? -1 : 1
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
-  const attack = isAttackableBall(ball, side) && statusRatio > 0.28
+  const context = detectStrokeContext(player, ball)
+  const attack = (context === 'opener' || context === 'rally') && isAttackableBall(ball, side) && statusRatio > 0.28
+
+  if (context !== 'rally') {
+    const openerX = player.archetype === 'PenAttack'
+      ? side * 0.18
+      : player.archetype === 'PenDrive'
+        ? 0
+        : -side * 0.12
+    const openerY = lane * TABLE.length * (context === 'serve' ? 0.18 : context === 'receive' ? 0.24 : 0.34)
+    const stroke = buildOpeningStrokePlan(player, ball, openerX, openerY, context)
+    return { stroke, score: evaluateAIReturn(player, stroke, attack, context), targetX: openerX, targetY: openerY, attack, context }
+  }
 
   let best: AITargetChoice | null = null
   const xs = [-0.42, -0.22, 0, 0.22, 0.42].map((f) => f * (TABLE.width / 2))
@@ -790,8 +892,8 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState): AITarg
           if (!bounce) continue
           const sameSide = side > 0 ? bounce.y < 0 : bounce.y > 0
           if (sameSide) continue
-          const score = evaluateAIReturn(player, stroke, attack)
-          if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack }
+          const score = evaluateAIReturn(player, stroke, attack, context)
+          if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack, context }
         }
       }
     }
@@ -799,5 +901,5 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState): AITarg
 
   if (best) return best
   const fallback = buildStrokePlan(player, ball, 0, lane * TABLE.length * 0.24, 0.66, profile.spinBias)
-  return { stroke: fallback, score: -1, targetX: 0, targetY: lane * TABLE.length * 0.24, attack: false }
+  return { stroke: fallback, score: -1, targetX: 0, targetY: lane * TABLE.length * 0.24, attack: false, context }
 }

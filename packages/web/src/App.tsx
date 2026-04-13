@@ -50,7 +50,7 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
-  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide } | null>(null)
+  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally' } | null>(null)
   const ballRef = useRef<BallState>(createIdleBall())
   const playerRef = useRef<PlayerState>(createPlayer(1, 'PenAttack'))
   const opponentRef = useRef<PlayerState>(createPlayer(-1, 'ShakeCut'))
@@ -142,7 +142,9 @@ export default function App() {
             nextBall = serveBall
             nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand)
             aiCooldownRef.current = 80
-            nextMessage = 'Opponent begins the serve...'
+            nextMessage = serveChoice.stroke.family === 'cut'
+              ? 'Opponent opens with a spin-heavy serve...'
+              : 'Opponent begins the serve...'
           }
         }
 
@@ -156,26 +158,36 @@ export default function App() {
         if (isBallHittableForSide(nextBall, -1) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
             const choice = chooseAIReturnShot(nextOpponent, { ...nextBall })
-            const planTicks = Math.max(1, (oppPlan?.etaTicks ?? 18) - 19)
+            const lateDecision = choice.context === 'rally' ? 19 : choice.context === 'opener' ? 16 : 12
+            const planTicks = Math.max(1, (oppPlan?.etaTicks ?? 18) - lateDecision)
             aiPlanRef.current = {
               swingAt: planTicks,
               shot: choice.stroke.shot,
               attack: choice.attack,
               family: choice.stroke.family,
               hand: choice.stroke.hand,
+              context: choice.context,
             }
-            nextMessage = choice.attack
-              ? `Opponent lines up a ${choice.stroke.hand} ${choice.stroke.family}...`
-              : `Opponent reads a ${choice.stroke.hand} ${choice.stroke.family}...`
+            nextMessage = choice.context === 'receive'
+              ? `Opponent shapes a ${choice.stroke.family} receive...`
+              : choice.context === 'opener'
+                ? `Opponent looks for a ${choice.stroke.family} opener...`
+                : choice.attack
+                  ? `Opponent lines up a ${choice.stroke.hand} ${choice.stroke.family}...`
+                  : `Opponent reads a ${choice.stroke.hand} ${choice.stroke.family}...`
           }
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
             if (aiPlanRef.current.swingAt <= 0 && aiCooldownRef.current === 0) {
               nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot, aiPlanRef.current.family, aiPlanRef.current.hand)
-              aiCooldownRef.current = 65
-              nextMessage = aiPlanRef.current.attack
-                ? `Opponent commits late to a ${aiPlanRef.current.hand} attack!`
-                : `Opponent commits late to a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
+              aiCooldownRef.current = aiPlanRef.current.context === 'rally' ? 65 : 54
+              nextMessage = aiPlanRef.current.context === 'receive'
+                ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
+                : aiPlanRef.current.context === 'opener'
+                  ? `Opponent jumps on the first attack!`
+                  : aiPlanRef.current.attack
+                    ? `Opponent commits late to a ${aiPlanRef.current.hand} attack!`
+                    : `Opponent commits late to a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
               aiPlanRef.current = null
             }
           }
@@ -396,7 +408,7 @@ export default function App() {
       : ball.status === 8 ? createNeutralBallForSide(1) : { ...ball }
 
     const stroke = effectiveServeMode
-      ? { shot: solveTargetToVS(baseBall, target.x, target.y, nextLevel, spin), family: 'drive' as ShotFamily, hand: 'forehand' as HandSide }
+      ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
       : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
 
     const nextPlayer = startSwing(playerRef.current, stroke.shot, stroke.family, stroke.hand)
@@ -456,6 +468,7 @@ export default function App() {
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
           <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
+          <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}</div>
           <div>{message}</div>
         </div>
       </div>
@@ -504,7 +517,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Match flow now tracks serves and game end: serve ownership rotates across points, opponent can initiate its own serve, and the prototype now plays to 11 with a two-point margin.
+            Opening phases now split more cleanly: serves, receives, and first attacks use distinct AI timing and archetype-biased choices before settling into normal rally planning.
           </div>
         </div>
       </div>
