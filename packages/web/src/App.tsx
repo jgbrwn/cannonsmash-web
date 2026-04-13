@@ -5,11 +5,13 @@ import {
   TICK,
   ARCHETYPES,
   applyShot,
+  buildOpeningStrokePlan,
   buildStrokePlan,
   chooseAIReturnShot,
   createIdleBall,
   createNeutralBallForSide,
   createPlayer,
+  detectStrokeContext,
   findTableBounce,
   getHandSideForBall,
   getPlayerContactMetrics,
@@ -31,6 +33,7 @@ import {
   type PlayerState,
   type ShotFamily,
   type ShotSolution,
+  type StrokeContext,
 } from '@csmash/core'
 
 const BG = '#0f1115'
@@ -83,6 +86,7 @@ export default function App() {
     sidesSwapped: false,
   })
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
+  const [assistOpeningBias, setAssistOpeningBias] = useState(true)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
   const isYourServe = match.server === displayYouSide
@@ -110,6 +114,19 @@ export default function App() {
   const opponentPrediction = useMemo(() => predictContactPoint(ball, opponent.side, 180, getHandSideForBall(opponent, ball)), [ball, opponent])
   const playerStatusRatio = useMemo(() => getStatusRatio(player), [player])
   const oppStatusRatio = useMemo(() => getStatusRatio(opponent), [opponent])
+  const playerContext = useMemo<StrokeContext>(() => detectStrokeContext(player, ball), [player, ball])
+  const openingPreview = useMemo(() => {
+    const baseBall = ball.status === 8
+      ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
+      : ball
+    return buildOpeningStrokePlan(player, baseBall, target.x, target.y, playerContext)
+  }, [ball, isYourServe, player, playerContext, target.x, target.y])
+  const defaultPreview = useMemo(() => {
+    const baseBall = ball.status === 8
+      ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
+      : ball
+    return buildStrokePlan(player, baseBall, target.x, target.y, level, spin, playerContext === 'serve')
+  }, [ball, isYourServe, level, player, playerContext, player.side, spin, target.x, target.y])
 
   useEffect(() => {
     if (!running) return
@@ -451,9 +468,16 @@ export default function App() {
       ? tossForServe(player.side)
       : ball.status === 8 ? createNeutralBallForSide(player.side) : { ...ball }
 
-    const stroke = effectiveServeMode
-      ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
-      : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
+    const plannedContext = detectStrokeContext(playerRef.current, baseBall)
+    const stroke = assistOpeningBias && plannedContext !== 'rally'
+      ? buildOpeningStrokePlan(playerRef.current, baseBall, target.x, target.y, plannedContext)
+      : effectiveServeMode
+        ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
+        : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
+
+    if (match.gameOver && ball.status === 8) {
+      setMessage(`Next game ready — you are now on the ${player.side > 0 ? 'south' : 'north'} end.`)
+    }
 
     const nextPlayer = startSwing(playerRef.current, stroke.shot, stroke.family, stroke.hand)
     playerRef.current = nextPlayer
@@ -461,7 +485,13 @@ export default function App() {
     setShotQueued(stroke.shot)
     setPlayer(nextPlayer)
     setBall(baseBall)
-    setMessage(effectiveServeMode ? 'Serve swing started — move through the ball.' : `Swing started — ${stroke.hand} ${stroke.family}.`)
+    setMessage(
+      plannedContext !== 'rally'
+        ? `Swing started — ${plannedContext} ${stroke.hand} ${stroke.family}.`
+        : effectiveServeMode
+          ? 'Serve swing started — move through the ball.'
+          : `Swing started — ${stroke.hand} ${stroke.family}.`,
+    )
   }
 
   const resetIdle = () => {
@@ -520,6 +550,7 @@ export default function App() {
           <div>ball status: {ball.status}</div>
           <div>you: {player.archetype} · status {(playerStatusRatio * 100).toFixed(0)}%</div>
           <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
+          <div>phase: {playerContext} · opening bias {assistOpeningBias ? 'on' : 'off'}</div>
           <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
@@ -555,6 +586,10 @@ export default function App() {
             </select>
           </label>
         </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 13 }}>
+          <input type="checkbox" checked={assistOpeningBias} onChange={(e) => setAssistOpeningBias(e.target.checked)} />
+          Bias player openings by phase
+        </label>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <button onPointerDown={pointerDownSwing} onPointerUp={pointerUpSwing} onPointerCancel={pointerUpSwing} style={btn}>Hold / release swing</button>
           <button onClick={resetIdle} style={btnGhost}>Reset</button>
@@ -562,6 +597,11 @@ export default function App() {
         </div>
         {shotQueued && <div style={{ fontSize: 12, marginTop: 10, opacity: 0.9 }}>queued impact shot ready</div>}
         {ball.status === 8 && <div style={{ fontSize: 12, marginTop: 6, opacity: 0.85 }}>{match.matchOver ? 'match complete' : isYourServe ? 'ready to serve' : 'waiting for opponent serve'}</div>}
+        <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
+          phase: {playerContext}<br />
+          suggested: {openingPreview.hand} {openingPreview.family}<br />
+          manual: {defaultPreview.hand} {defaultPreview.family}
+        </div>
         {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
         {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
         {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s</div>}
@@ -573,7 +613,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            The prototype now runs as a lightweight best-of-five: games advance automatically, ends switch after each game, and opening phases still use distinct serve / receive / opener planning.
+            Player-side guidance now mirrors the AI structure too: the HUD shows live phase detection plus a suggested opening stroke, and you can toggle whether queued player openings follow that phase bias automatically.
           </div>
         </div>
       </div>

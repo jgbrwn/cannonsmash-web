@@ -619,14 +619,14 @@ export function buildStrokePlan(player: PlayerState, ball: BallState, targetX: n
   return { shot, family, hand }
 }
 
-function detectStrokeContext(player: PlayerState, ball: BallState): StrokeContext {
+export function detectStrokeContext(player: PlayerState, ball: BallState): StrokeContext {
   if (ball.status === 6 || ball.status === 7) return 'serve'
   if (ball.status === 1 || ball.status === 3) return 'receive'
   if ((player.side === 1 && ball.status === 2) || (player.side === -1 && ball.status === 0)) return 'opener'
   return 'rally'
 }
 
-function buildOpeningStrokePlan(
+export function buildOpeningStrokePlan(
   player: PlayerState,
   ball: BallState,
   targetX: number,
