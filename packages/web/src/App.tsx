@@ -41,7 +41,7 @@ const BG = '#0f1115'
 type Vec2 = { x: number; y: number }
 
 type MatchState = {
-  server: 1 | -1
+  server: 'you' | 'opp'
   servesUsed: number
   gameOver: boolean
   winner: 'you' | 'opp' | null
@@ -50,6 +50,7 @@ type MatchState = {
   matchOver: boolean
   matchWinner: 'you' | 'opp' | null
   sidesSwapped: boolean
+  deciderSwitchDone: boolean
 }
 
 export default function App() {
@@ -75,7 +76,7 @@ export default function App() {
   const [shotQueued, setShotQueued] = useState<ShotSolution | null>(null)
   const [score, setScore] = useState({ you: 0, opp: 0 })
   const [match, setMatch] = useState<MatchState>({
-    server: 1,
+    server: 'you',
     servesUsed: 0,
     gameOver: false,
     winner: null,
@@ -84,12 +85,14 @@ export default function App() {
     matchOver: false,
     matchWinner: null,
     sidesSwapped: false,
+    deciderSwitchDone: false,
   })
   const [message, setMessage] = useState('Aim, then hold/release to swing.')
   const [assistOpeningBias, setAssistOpeningBias] = useState(true)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
-  const isYourServe = match.server === displayYouSide
+  const serverSide = match.server === 'you' ? displayYouSide : (-displayYouSide as 1 | -1)
+  const isYourServe = match.server === 'you'
   const effectiveServeMode = serveMode || ball.status === 8
 
   useEffect(() => { ballRef.current = ball }, [ball])
@@ -145,6 +148,7 @@ export default function App() {
         const oppWon = playerMissSide ? player.side > 0 : player.side < 0
         let nextScore = score
         let pointMessage = ''
+        let nextDisplaySide = displayYouSide
         setScore((s) => {
           nextScore = oppWon ? { ...s, opp: s.opp + 1 } : { ...s, you: s.you + 1 }
           return nextScore
@@ -160,11 +164,17 @@ export default function App() {
             : m.games
           const matchOver = nextGames.you >= 3 || nextGames.opp >= 3
           const matchWinner = matchOver ? (nextGames.you > nextGames.opp ? 'you' : 'opp') : null
-          const nextGameNumber = gameOver ? m.gameNumber + 1 : m.gameNumber
-          const nextSidesSwapped = gameOver ? !m.sidesSwapped : m.sidesSwapped
+          const enteringDecider = !gameOver && nextGames.you === 2 && nextGames.opp === 2
+          const shouldSwitchMidGame = enteringDecider && !m.deciderSwitchDone && totalPoints >= 10
+          const nextSidesSwapped = gameOver ? !m.sidesSwapped : shouldSwitchMidGame ? !m.sidesSwapped : m.sidesSwapped
+          nextDisplaySide = nextSidesSwapped ? -1 : 1
           const rotation = totalPoints >= 20 ? totalPoints : Math.floor(totalPoints / 2)
-          const nextServer = gameOver ? (nextSidesSwapped ? -1 : 1) : (rotation % 2 === 0 ? displayYouSide : (-displayYouSide as 1 | -1))
-          pointMessage = matchPointMessage(nextScore, nextGames, oppWon, matchOver)
+          const nextServer = gameOver
+            ? (winner === 'you' ? 'opp' : 'you')
+            : (rotation % 2 === 0 ? 'you' : 'opp')
+          const nextGameNumber = gameOver ? m.gameNumber + 1 : m.gameNumber
+          const nextDeciderSwitchDone = gameOver ? false : shouldSwitchMidGame ? true : m.deciderSwitchDone
+          pointMessage = matchPointMessage(nextScore, nextGames, oppWon, matchOver, shouldSwitchMidGame)
           return {
             server: nextServer,
             servesUsed: gameOver ? 0 : (totalPoints >= 20 ? totalPoints % 2 : totalPoints % 2),
@@ -175,13 +185,12 @@ export default function App() {
             matchOver,
             matchWinner,
             sidesSwapped: nextSidesSwapped,
+            deciderSwitchDone: nextDeciderSwitchDone,
           }
         })
         aiCooldownRef.current = 0
         nextMessage = pointMessage
         nextBall = createIdleBall()
-        const pointEndedGame = (nextScore.you >= 11 || nextScore.opp >= 11) && Math.abs(nextScore.you - nextScore.opp) >= 2
-        const nextDisplaySide = pointEndedGame ? (-displayYouSide as 1 | -1) : displayYouSide
         nextPlayer = createPlayer(nextDisplaySide, playerArchetype)
         nextOpponent = createPlayer(-nextDisplaySide as 1 | -1, oppArchetype)
         aiPlanRef.current = null
@@ -191,7 +200,7 @@ export default function App() {
         const oppPlan = pickAIMoveTarget(nextOpponent, nextBall)
 
         if (ballRef.current.status === 8) {
-          if (match.server === opponent.side && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
+          if (serverSide === opponent.side && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
             if (match.gameOver && !match.matchOver) {
               setMatch((m) => ({ ...m, gameOver: false, winner: null }))
             }
@@ -507,7 +516,7 @@ export default function App() {
     setOpponent(idleOpponent)
     setScore({ you: 0, opp: 0 })
     setMatch({
-      server: 1,
+      server: 'you',
       servesUsed: 0,
       gameOver: false,
       winner: null,
@@ -516,6 +525,7 @@ export default function App() {
       matchOver: false,
       matchWinner: null,
       sidesSwapped: false,
+      deciderSwitchDone: false,
     })
     setLastShot(null)
     setShotQueued(null)
@@ -546,7 +556,7 @@ export default function App() {
           <div>games: you {match.games.you} — {match.games.opp} opp</div>
           <div>game {match.gameNumber} · score: you {score.you} — {score.opp} opp</div>
           <div>serve: {isYourServe ? 'you' : 'opp'} {match.matchOver ? '· match over' : match.gameOver ? '· game over' : ''}</div>
-          <div>ends: you are {player.side > 0 ? 'south' : 'north'}</div>
+          <div>ends: you are {player.side > 0 ? 'south' : 'north'}{match.games.you === 2 && match.games.opp === 2 ? ' · decider' : ''}</div>
           <div>ball status: {ball.status}</div>
           <div>you: {player.archetype} · status {(playerStatusRatio * 100).toFixed(0)}%</div>
           <div>opp: {opponent.archetype} · status {(oppStatusRatio * 100).toFixed(0)}%</div>
@@ -630,10 +640,12 @@ function matchPointMessage(
   games: { you: number; opp: number },
   oppWon: boolean,
   matchOver: boolean,
+  switchedEndsMidGame: boolean,
 ): string {
   const gameOver = (score.you >= 11 || score.opp >= 11) && Math.abs(score.you - score.opp) >= 2
   if (matchOver) return oppWon ? 'Match to opponent.' : 'Match to you.'
   if (gameOver) return oppWon ? `Game to opponent. Games ${games.you}-${games.opp}. Ends switch.` : `Game to you. Games ${games.you}-${games.opp}. Ends switch.`
+  if (switchedEndsMidGame) return oppWon ? 'Point to opponent. Decider ends switch.' : 'Point to you. Decider ends switch.'
   return oppWon ? 'Point to opponent.' : 'Point to you.'
 }
 
