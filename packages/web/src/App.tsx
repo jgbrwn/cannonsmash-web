@@ -228,7 +228,7 @@ export default function App() {
             const serveBall = tossForServe(opponent.side)
             const serveChoice = chooseAIReturnShot(nextOpponent, serveBall)
             nextBall = serveBall
-            nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand)
+            nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand, serveChoice.stroke.servePattern ?? null, serveChoice.stroke.receivePressure ?? null)
             setLiveServePattern(serveChoice.stroke.servePattern ?? null)
             setLiveReceivePressure(null)
             aiCooldownRef.current = 80
@@ -273,7 +273,7 @@ export default function App() {
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
             if (aiPlanRef.current.swingAt <= 0 && aiCooldownRef.current === 0) {
-              nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot, aiPlanRef.current.family, aiPlanRef.current.hand)
+              nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot, aiPlanRef.current.family, aiPlanRef.current.hand, aiPlanRef.current.servePattern ?? null, liveReceivePressure)
               aiCooldownRef.current = aiPlanRef.current.context === 'rally' ? 65 : 54
               nextMessage = aiPlanRef.current.context === 'receive'
                 ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
@@ -311,7 +311,9 @@ export default function App() {
                 ? `Clean ${openingPreview.servePattern} serve.`
                 : 'Clean contact.'
               : impact.quality < 0.38
-                ? 'Fatigued contact.'
+                ? player.plannedReceivePressure === 'high'
+                  ? 'Pressured receive broke down.'
+                  : 'Fatigued contact.'
                 : impact.timingError > 0.05
                   ? 'Late contact.'
                   : impact.timingError < -0.05
@@ -339,9 +341,11 @@ export default function App() {
               ? aiPlanRef.current?.context === 'serve' && aiPlanRef.current.servePattern
                 ? `Opponent lands a ${aiPlanRef.current.servePattern} serve.`
                 : 'Opponent times the return cleanly.'
-              : getStatusRatio(nextOpponent) < 0.3
-                ? 'Opponent lunges a tired return.'
-                : 'Opponent scrambles a return!'
+              : nextOpponent.plannedReceivePressure === 'high'
+                ? 'Opponent buckles under receive pressure.'
+                : getStatusRatio(nextOpponent) < 0.3
+                  ? 'Opponent lunges a tired return.'
+                  : 'Opponent scrambles a return!'
           } else {
             aiPlanRef.current = null
           }
@@ -538,7 +542,7 @@ export default function App() {
       setMessage(`Next game ready — you are now on the ${player.side > 0 ? 'south' : 'north'} end.`)
     }
 
-    const nextPlayer = startSwing(playerRef.current, stroke.shot, stroke.family, stroke.hand)
+    const nextPlayer = startSwing(playerRef.current, stroke.shot, stroke.family, stroke.hand, stroke.servePattern ?? null, stroke.receivePressure ?? null)
     playerRef.current = nextPlayer
     ballRef.current = baseBall
     setShotQueued(stroke.shot)
@@ -618,7 +622,9 @@ export default function App() {
           <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
           <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
           <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
+          <div>your pressure: {player.plannedReceivePressure ?? 'none'}</div>
           <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
+          <div>opp pressure: {opponent.plannedReceivePressure ?? 'none'}</div>
           <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}</div>
           <div>{message}</div>
         </div>

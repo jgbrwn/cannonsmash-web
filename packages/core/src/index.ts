@@ -341,6 +341,8 @@ export interface PlayerState {
   requestedShot: ShotSolution | null
   plannedHand: HandSide
   plannedFamily: ShotFamily
+  plannedServePattern: ServePattern | null
+  plannedReceivePressure: ReceivePressure | null
   lastImpactTimer: number | null
   status: number
   statusMax: number
@@ -480,6 +482,8 @@ export function createPlayer(side: PlayerSide, archetype: PlayerArchetype = 'Pen
     requestedShot: null,
     plannedHand: 'forehand',
     plannedFamily: 'drive',
+    plannedServePattern: null,
+    plannedReceivePressure: null,
     lastImpactTimer: null,
     status: profile.statusMax,
     statusMax: profile.statusMax,
@@ -497,9 +501,10 @@ export function getPlayerStanceOffset(player: PlayerState, hand: HandSide = play
 
 export function setPlayerTarget(player: PlayerState, targetX: number, targetY: number, hand: HandSide = player.plannedHand): PlayerState {
   const stance = getPlayerStanceOffset(player, hand)
+  const pressureScale = player.plannedReceivePressure === 'high' ? 1.18 : player.plannedReceivePressure === 'medium' ? 1.08 : 1
   return {
     ...player,
-    targetX: clamp(targetX - stance.x, -TABLE.width / 2 - 0.55, TABLE.width / 2 + 0.55),
+    targetX: clamp(targetX * pressureScale - stance.x, -TABLE.width / 2 - 0.55, TABLE.width / 2 + 0.55),
     targetY: player.side > 0
       ? clamp(targetY - stance.y, -TABLE.length / 2 - 0.75, -0.08)
       : clamp(targetY - stance.y, 0.08, TABLE.length / 2 + 0.75),
@@ -521,9 +526,17 @@ export function recoverPlayerStatus(player: PlayerState, amount = 0.0028): Playe
   }
 }
 
-export function startSwing(player: PlayerState, shot: ShotSolution, family: ShotFamily = 'drive', hand: HandSide = 'forehand'): PlayerState {
+export function startSwing(
+  player: PlayerState,
+  shot: ShotSolution,
+  family: ShotFamily = 'drive',
+  hand: HandSide = 'forehand',
+  servePattern: ServePattern | null = null,
+  receivePressure: ReceivePressure | null = null,
+): PlayerState {
   if (player.swingState !== 'idle') return player
   const profile = getArchetypeProfile(player)
+  const pressureCost = receivePressure === 'high' ? 0.02 : receivePressure === 'medium' ? 0.01 : 0
   return {
     ...player,
     swingTimer: 1,
@@ -531,8 +544,10 @@ export function startSwing(player: PlayerState, shot: ShotSolution, family: Shot
     requestedShot: shot,
     plannedFamily: family,
     plannedHand: hand,
+    plannedServePattern: servePattern,
+    plannedReceivePressure: receivePressure,
     lastImpactTimer: null,
-    status: clamp(player.status - profile.recoveryCost * 0.6, 0, player.statusMax),
+    status: clamp(player.status - profile.recoveryCost * 0.6 - pressureCost, 0, player.statusMax),
   }
 }
 
@@ -557,7 +572,17 @@ export function stepPlayer(player: PlayerState): PlayerState {
     return { ...moved, swingTimer: timer, swingState: 'impact', lastImpactTimer: timer }
   }
   if (timer >= 50) {
-    return recoverPlayerStatus({ ...moved, swingTimer: 0, swingState: 'idle', requestedShot: null, plannedFamily: 'drive', plannedHand: 'forehand', lastImpactTimer: null }, 0.01)
+    return recoverPlayerStatus({
+      ...moved,
+      swingTimer: 0,
+      swingState: 'idle',
+      requestedShot: null,
+      plannedFamily: 'drive',
+      plannedHand: 'forehand',
+      plannedServePattern: null,
+      plannedReceivePressure: null,
+      lastImpactTimer: null,
+    }, 0.01)
   }
   return { ...moved, swingTimer: timer, swingState: timer < 20 ? 'backswing' : 'recovery' }
 }
@@ -565,7 +590,8 @@ export function stepPlayer(player: PlayerState): PlayerState {
 export function getPlayerContactMetrics(player: PlayerState, ball: BallState): ContactMetrics {
   const profile = getArchetypeProfile(player)
   const stance = getPlayerStanceOffset(player)
-  const handReach = player.plannedHand === 'forehand' ? 1 : 0.92
+  const pressureReach = player.plannedReceivePressure === 'high' ? 0.88 : player.plannedReceivePressure === 'medium' ? 0.94 : 1
+  const handReach = (player.plannedHand === 'forehand' ? 1 : 0.92) * pressureReach
   const rx = player.x + player.side * CONTACT_LATERAL + stance.x
   const ry = player.y + player.side * CONTACT_FORWARD + stance.y
   const rz = player.z + CONTACT_HEIGHT + (player.plannedFamily === 'attack' ? 0.03 : player.plannedFamily === 'cut' ? -0.02 : 0)
@@ -573,8 +599,9 @@ export function getPlayerContactMetrics(player: PlayerState, ball: BallState): C
   const dy = ball.y - ry
   const dz = ball.z - rz
   const distance = Math.hypot(dx, dy, dz)
-  const timingError = player.side * dy
-  const reachable = Math.abs(dx) <= profile.reachX * handReach && Math.abs(dy) <= profile.reachY && Math.abs(dz) <= profile.reachZ && distance <= profile.contactRadius * handReach
+  const timingScale = player.plannedReceivePressure === 'high' ? 1.22 : player.plannedReceivePressure === 'medium' ? 1.1 : 1
+  const timingError = player.side * dy * timingScale
+  const reachable = Math.abs(dx) <= profile.reachX * handReach && Math.abs(dy) <= profile.reachY * pressureReach && Math.abs(dz) <= profile.reachZ && distance <= profile.contactRadius * handReach
   return { dx, dy, dz, distance, timingError, reachable, contactX: rx, contactY: ry, contactZ: rz }
 }
 
@@ -822,10 +849,17 @@ export function resolveImpact(player: PlayerState, ball: BallState): ImpactResul
   const distancePenalty = clamp(metrics.distance / profile.contactRadius, 0, 1)
   const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
   const quality = clamp(1 - distancePenalty * 0.5 - timingPenalty * 0.7 - (1 - statusRatio) * 0.45, 0, 1)
-  const spent = clamp(profile.recoveryCost + distancePenalty * 0.012 + timingPenalty * 0.02, 0, player.statusMax)
+  const pressurePenalty = player.plannedReceivePressure === 'high' ? 0.08 : player.plannedReceivePressure === 'medium' ? 0.04 : 0
+  const spent = clamp(profile.recoveryCost + distancePenalty * 0.012 + timingPenalty * 0.02 + pressurePenalty * 0.4, 0, player.statusMax)
 
   return {
-    player: { ...player, swingState: 'recovery', lastImpactTimer: null, status: clamp(player.status - spent, 0, player.statusMax) },
+    player: {
+      ...player,
+      swingState: 'recovery',
+      lastImpactTimer: null,
+      status: clamp(player.status - spent, 0, player.statusMax),
+      plannedReceivePressure: null,
+    },
     shot,
     madeContact: Boolean(shot),
     quality,
