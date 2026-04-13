@@ -63,6 +63,8 @@ export default function App() {
   const aiCooldownRef = useRef(0)
   const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean } | null>(null)
   const fxRef = useRef({ flash: 0, pulse: 0, bounce: 0, pulseColor: '#7ed7ff' })
+  const audioRef = useRef<AudioContext | null>(null)
+  const audioEnabledRef = useRef(false)
   const ballRef = useRef<BallState>(createIdleBall())
   const playerRef = useRef<PlayerState>(createPlayer(1, 'PenAttack'))
   const opponentRef = useRef<PlayerState>(createPlayer(-1, 'ShakeCut'))
@@ -100,6 +102,7 @@ export default function App() {
   const [liveReceivePressure, setLiveReceivePressure] = useState<ReceivePressure | null>(null)
   const [showMenu, setShowMenu] = useState(true)
   const [menuCollapsed, setMenuCollapsed] = useState(false)
+  const [soundEnabled, setSoundEnabled] = useState(true)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
   const serverSide = match.server === 'you' ? displayYouSide : (-displayYouSide as 1 | -1)
@@ -141,6 +144,10 @@ export default function App() {
       : ball
     return buildStrokePlan(player, baseBall, target.x, target.y, level, spin, playerContext === 'serve')
   }, [ball, isYourServe, level, player, playerContext, player.side, spin, target.x, target.y])
+
+  useEffect(() => {
+    audioEnabledRef.current = soundEnabled
+  }, [soundEnabled])
 
   useEffect(() => {
     if (!running || showMenu) return
@@ -211,6 +218,10 @@ export default function App() {
         aiCooldownRef.current = 0
         setLiveServePattern(null)
         setLiveReceivePressure(null)
+        playTone(audioRef, audioEnabledRef, pointMessage.includes('Game to') ? 460 : pointMessage.includes('Match to') ? 620 : 360, pointMessage.includes('Game to') ? 0.12 : pointMessage.includes('Match to') ? 0.18 : 0.08, 'sawtooth', 0.018)
+        if (pointMessage.includes('Game to') || pointMessage.includes('Match to')) {
+          setTimeout(() => playTone(audioRef, audioEnabledRef, pointMessage.includes('Match to') ? 780 : 620, pointMessage.includes('Match to') ? 0.22 : 0.14, 'triangle', 0.016), 90)
+        }
         nextMessage = pointMessage
         nextBall = createIdleBall()
         nextPlayer = createPlayer(nextDisplaySide, playerArchetype)
@@ -306,6 +317,7 @@ export default function App() {
             fxRef.current.flash = 1
             fxRef.current.pulse = 1
             fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
+            playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
             if (playerContext === 'serve') {
               setLiveServePattern(openingPreview.servePattern ?? null)
               setLiveReceivePressure(null)
@@ -340,6 +352,7 @@ export default function App() {
             fxRef.current.flash = 1
             fxRef.current.pulse = 1
             fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
+            playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
             if (aiPlanRef.current?.context === 'serve') {
               setLiveServePattern(aiPlanRef.current.servePattern ?? null)
               setLiveReceivePressure(null)
@@ -364,6 +377,7 @@ export default function App() {
 
       if (prevBall.status >= 0 && nextBall.status >= 0 && prevBall.status !== nextBall.status && (nextBall.status === 0 || nextBall.status === 1 || nextBall.status === 2 || nextBall.status === 3)) {
         fxRef.current.bounce = 1
+        playTone(audioRef, audioEnabledRef, 240, 0.035, 'sine', 0.012)
       }
 
       ballRef.current = nextBall
@@ -752,6 +766,10 @@ export default function App() {
           <input type="checkbox" checked={assistOpeningBias} onChange={(e) => setAssistOpeningBias(e.target.checked)} />
           Bias player openings by phase
         </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13 }}>
+          <input type="checkbox" checked={soundEnabled} onChange={(e) => setSoundEnabled(e.target.checked)} />
+          Simple sound hooks
+        </label>
         <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
           <button onPointerDown={pointerDownSwing} onPointerUp={pointerUpSwing} onPointerCancel={pointerUpSwing} style={btn}>{showMenu ? 'Start match' : 'Hold / release swing'}</button>
           <button onClick={resetIdle} style={btnGhost}>{match.matchOver ? 'New match' : 'Reset'}</button>
@@ -794,7 +812,7 @@ export default function App() {
         <div style={{ padding: 12, background: 'rgba(0,0,0,0.45)', borderRadius: 12 }}>
           <div style={{ fontWeight: 700, marginBottom: 8 }}>Notes</div>
           <div style={{ fontSize: 13, lineHeight: 1.45, opacity: 0.9 }}>
-            Game feel has a bit more life now too: contacts flash, bounces pulse, and successful or strained impacts read more clearly in motion even before audio exists.
+            Game feel now has simple placeholder audio too: hits, bounces, points, games, and matches fire lightweight sound hooks so the loop reads more clearly even before real assets exist.
           </div>
         </div>
       </div>
@@ -870,4 +888,32 @@ function choicePressure(family: ShotFamily, servePattern: ServePattern | null): 
   if (servePattern === 'short-spin') return family === 'cut' || family === 'block' ? 'high' : 'medium'
   if (servePattern === 'wide-setup') return family === 'attack' ? 'medium' : 'high'
   return family === 'attack' ? 'low' : 'medium'
+}
+
+function playTone(
+  audioRef: React.MutableRefObject<AudioContext | null>,
+  enabledRef: React.MutableRefObject<boolean>,
+  frequency: number,
+  duration: number,
+  type: OscillatorType,
+  gainValue: number,
+) {
+  if (!enabledRef.current || typeof window === 'undefined') return
+  const AudioCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!AudioCtor) return
+  if (!audioRef.current) audioRef.current = new AudioCtor()
+  const ctx = audioRef.current
+  if (!ctx) return
+  if (ctx.state === 'suspended') ctx.resume()
+
+  const osc = ctx.createOscillator()
+  const gain = ctx.createGain()
+  osc.type = type
+  osc.frequency.value = frequency
+  gain.gain.setValueAtTime(gainValue, ctx.currentTime)
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration)
+  osc.connect(gain)
+  gain.connect(ctx.destination)
+  osc.start()
+  osc.stop(ctx.currentTime + duration)
 }
