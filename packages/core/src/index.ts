@@ -1219,11 +1219,31 @@ function isAttackableBall(ball: BallState, side: PlayerSide): boolean {
   return ball.z > TABLE.height + 0.34 && ((side === 1 && ball.y < -0.2) || (side === -1 && ball.y > 0.2))
 }
 
-export function chooseRallyFamily(player: PlayerState, ball: BallState, hand: HandSide): ShotFamily {
+export function chooseRallyFamily(player: PlayerState, ball: BallState, hand: HandSide, incomingPattern: RallyPattern | null = null): ShotFamily {
   const statusRatio = getStatusRatio(player)
   const highBall = ball.z > TABLE.height + 0.36
   const lowBall = ball.z < TABLE.height + 0.2
   const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+
+  if (incomingPattern === 'pressure') {
+    if (player.archetype === 'ShakeCut') return lowBall || hand === 'backhand' ? 'cut' : 'block'
+    if (player.archetype === 'PenDrive') return hand === 'backhand' || closeToTable ? 'block' : highBall && hand === 'forehand' && statusRatio > 0.62 ? 'attack' : 'drive'
+    if (hand === 'backhand' || closeToTable) return 'block'
+    return highBall && hand === 'forehand' && statusRatio > 0.52 ? 'attack' : 'drive'
+  }
+
+  if (incomingPattern === 'reset') {
+    if (player.archetype === 'ShakeCut') return highBall && hand === 'forehand' && statusRatio > 0.68 ? 'drive' : 'cut'
+    if (player.archetype === 'PenDrive') return hand === 'forehand' && statusRatio > 0.42 ? (highBall ? 'attack' : 'drive') : 'drive'
+    return hand === 'forehand' && statusRatio > 0.36 ? (highBall ? 'attack' : 'drive') : 'block'
+  }
+
+  if (incomingPattern === 'counter') {
+    if (player.archetype === 'ShakeCut') return hand === 'backhand' || lowBall ? 'block' : 'cut'
+    if (player.archetype === 'PenDrive') return hand === 'backhand' || closeToTable ? 'block' : 'drive'
+    if (hand === 'forehand' && highBall && statusRatio > 0.42) return 'attack'
+    return hand === 'forehand' ? 'drive' : 'block'
+  }
 
   if (player.archetype === 'PenAttack') {
     if (hand === 'forehand' && highBall && statusRatio > 0.34) return 'attack'
@@ -1311,14 +1331,21 @@ export function chooseRallyPattern(
   if (incomingPattern === 'pressure') {
     if (family === 'block') return 'counter'
     if (family === 'cut') return 'reset'
-    if (family === 'drive') return player.archetype === 'PenAttack' && statusRatio > 0.58 ? 'pressure' : 'counter'
-    return highBall && statusRatio > 0.54 ? 'pressure' : 'counter'
+    if (family === 'drive') return player.archetype === 'PenAttack' && statusRatio > 0.64 && highBall ? 'pressure' : 'counter'
+    return highBall && statusRatio > 0.6 ? 'pressure' : 'counter'
   }
 
   if (incomingPattern === 'reset') {
-    if (family === 'attack') return highBall && statusRatio > 0.42 ? 'pressure' : 'counter'
-    if (family === 'drive') return player.archetype === 'ShakeCut' ? 'reset' : 'pressure'
+    if (family === 'attack') return highBall && statusRatio > 0.38 ? 'pressure' : 'counter'
+    if (family === 'drive') return player.archetype === 'ShakeCut' ? 'reset' : statusRatio > 0.34 ? 'pressure' : 'counter'
     return family === 'cut' ? 'reset' : 'counter'
+  }
+
+  if (incomingPattern === 'counter') {
+    if (family === 'drive') return player.archetype === 'ShakeCut' ? 'counter' : closeToTable ? 'counter' : 'pressure'
+    if (family === 'attack') return highBall && statusRatio > 0.5 ? 'pressure' : 'counter'
+    if (family === 'block') return 'counter'
+    return statusRatio > 0.5 ? 'counter' : 'reset'
   }
 
   if (family === 'attack') return highBall && statusRatio > 0.48 ? 'pressure' : 'counter'
@@ -1337,7 +1364,7 @@ export function buildRallyStrokePlan(
   incomingPattern: RallyPattern | null = null,
 ): PlannedStroke & { rallyPattern: RallyPattern; commitStyle: 'early-take' | 'balanced' | 'late-read' } {
   const hand = getHandSideForBall(player, ball)
-  const family = chooseRallyFamily(player, ball, hand)
+  const family = chooseRallyFamily(player, ball, hand, incomingPattern)
   const rallyPattern = chooseRallyPattern(player, family, ball, incomingPattern)
   const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
   const profile = getArchetypeProfile(player)
@@ -1487,7 +1514,7 @@ export function chooseAIReturnShot(
 
   let best: AITargetChoice | null = null
   const hand = getHandSideForBall(player, ball)
-  const family = chooseRallyFamily(player, ball, hand)
+  const family = chooseRallyFamily(player, ball, hand, incomingRallyPattern)
   const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
   const rallyPattern = chooseRallyPattern(player, family, ball, incomingRallyPattern)
   const xs = family === 'attack'
