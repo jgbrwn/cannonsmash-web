@@ -8,6 +8,7 @@ import {
   buildOpeningStrokePlan,
   buildStrokePlan,
   chooseAIReturnShot,
+  analyzeServe,
   createIdleBall,
   createNeutralBallForSide,
   createPlayer,
@@ -325,32 +326,58 @@ export default function App() {
           nextPlayer = impact.player
           clearQueuedShot = true
           if (impact.madeContact && impact.shot) {
-            nextBall = applyShot(nextBall, impact.shot)
-            nextLastShot = impact.shot
-            fxRef.current.flash = 1
-            fxRef.current.pulse = 1
-            fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
-            playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
             if (playerContext === 'serve') {
-              setLiveServePattern(openingPreview.servePattern ?? null)
-              setLiveReceivePressure(null)
-            } else if (playerContext === 'receive') {
-              setLiveServePattern(null)
-              setLiveReceivePressure(openingPreview.receivePressure ?? null)
+              const serveCheck = analyzeServe(nextBall, impact.shot)
+              if (!serveCheck.isLegal) {
+                nextBall = createIdleBall()
+                aiPlanRef.current = null
+                setLiveServePattern(null)
+                setLiveReceivePressure(null)
+                setServeWindowHint('Fault: serve clipped the net or missed the two-bounce window.')
+                playTone(audioRef, audioEnabledRef, 220, 0.09, 'square', 0.02)
+                nextMessage = serveCheck.reason === 'net'
+                  ? 'Serve fault — into the net.'
+                  : serveCheck.reason === 'long'
+                    ? 'Serve fault — long after the first bounce.'
+                    : serveCheck.reason === 'wide'
+                      ? 'Serve fault — too wide.'
+                      : 'Serve fault — wrong bounce order.'
+              } else {
+                nextBall = applyShot(nextBall, impact.shot)
+                nextLastShot = impact.shot
+                fxRef.current.flash = 1
+                fxRef.current.pulse = 1
+                fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
+                playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
+                setLiveServePattern(openingPreview.servePattern ?? null)
+                setLiveReceivePressure(null)
+                nextMessage = impact.quality > 0.72 && openingPreview.servePattern
+                  ? `Clean ${openingPreview.servePattern} serve.`
+                  : 'Legal serve in.'
+              }
+            } else {
+              nextBall = applyShot(nextBall, impact.shot)
+              nextLastShot = impact.shot
+              fxRef.current.flash = 1
+              fxRef.current.pulse = 1
+              fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
+              playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
+              if (playerContext === 'receive') {
+                setLiveServePattern(null)
+                setLiveReceivePressure(openingPreview.receivePressure ?? null)
+              }
+              nextMessage = impact.quality > 0.72
+                ? 'Clean contact.'
+                : impact.quality < 0.38
+                  ? player.plannedReceivePressure === 'high'
+                    ? 'Pressured receive broke down.'
+                    : 'Fatigued contact.'
+                  : impact.timingError > 0.05
+                    ? 'Late contact.'
+                    : impact.timingError < -0.05
+                      ? 'Early contact.'
+                      : 'Reached and guided it back.'
             }
-            nextMessage = impact.quality > 0.72
-              ? playerContext === 'serve' && openingPreview.servePattern
-                ? `Clean ${openingPreview.servePattern} serve.`
-                : 'Clean contact.'
-              : impact.quality < 0.38
-                ? player.plannedReceivePressure === 'high'
-                  ? 'Pressured receive broke down.'
-                  : 'Fatigued contact.'
-                : impact.timingError > 0.05
-                  ? 'Late contact.'
-                  : impact.timingError < -0.05
-                    ? 'Early contact.'
-                    : 'Reached and guided it back.'
           } else {
             nextMessage = playerStatusRatio < 0.3 ? 'Too drained — missed contact.' : 'Missed contact — get into position first.'
           }
@@ -361,27 +388,50 @@ export default function App() {
           const impact = resolveImpact(nextOpponent, nextBall)
           nextOpponent = impact.player
           if (impact.madeContact && impact.shot) {
-            nextBall = applyShot(nextBall, impact.shot)
-            fxRef.current.flash = 1
-            fxRef.current.pulse = 1
-            fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
-            playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
-            if (aiPlanRef.current?.context === 'serve') {
-              setLiveServePattern(aiPlanRef.current.servePattern ?? null)
-              setLiveReceivePressure(null)
-            } else if (aiPlanRef.current?.context === 'receive') {
-              setLiveServePattern(null)
-              setLiveReceivePressure(choicePressure(aiPlanRef.current.family, liveServePattern))
+            if (nextOpponent.plannedContext === 'serve') {
+              const serveCheck = analyzeServe(nextBall, impact.shot)
+              if (!serveCheck.isLegal) {
+                nextBall = createIdleBall()
+                setLiveServePattern(null)
+                setLiveReceivePressure(null)
+                nextMessage = serveCheck.reason === 'net'
+                  ? 'Opponent faults the serve into the net.'
+                  : serveCheck.reason === 'long'
+                    ? 'Opponent serves long — fault.'
+                    : serveCheck.reason === 'wide'
+                      ? 'Opponent misses the sideline on serve.'
+                      : 'Opponent serve fault.'
+                playTone(audioRef, audioEnabledRef, 210, 0.09, 'square', 0.02)
+              } else {
+                nextBall = applyShot(nextBall, impact.shot)
+                fxRef.current.flash = 1
+                fxRef.current.pulse = 1
+                fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
+                playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
+                setLiveServePattern(nextOpponent.plannedServePattern ?? null)
+                setLiveReceivePressure(null)
+                nextMessage = impact.quality > 0.72 && nextOpponent.plannedServePattern
+                  ? `Opponent lands a ${nextOpponent.plannedServePattern} serve.`
+                  : 'Opponent gets a legal serve in.'
+              }
+            } else {
+              nextBall = applyShot(nextBall, impact.shot)
+              fxRef.current.flash = 1
+              fxRef.current.pulse = 1
+              fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
+              playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
+              if (nextOpponent.plannedContext === 'receive') {
+                setLiveServePattern(null)
+                setLiveReceivePressure(choicePressure(nextOpponent.plannedFamily, liveServePattern))
+              }
+              nextMessage = impact.quality > 0.72
+                ? 'Opponent times the return cleanly.'
+                : nextOpponent.plannedReceivePressure === 'high'
+                  ? 'Opponent buckles under receive pressure.'
+                  : getStatusRatio(nextOpponent) < 0.3
+                    ? 'Opponent lunges a tired return.'
+                    : 'Opponent scrambles a return!'
             }
-            nextMessage = impact.quality > 0.72
-              ? aiPlanRef.current?.context === 'serve' && aiPlanRef.current.servePattern
-                ? `Opponent lands a ${aiPlanRef.current.servePattern} serve.`
-                : 'Opponent times the return cleanly.'
-              : nextOpponent.plannedReceivePressure === 'high'
-                ? 'Opponent buckles under receive pressure.'
-                : getStatusRatio(nextOpponent) < 0.3
-                  ? 'Opponent lunges a tired return.'
-                  : 'Opponent scrambles a return!'
           } else {
             aiPlanRef.current = null
           }
@@ -828,6 +878,7 @@ export default function App() {
           serve: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
           suggested: {openingPreview.hand} {openingPreview.family}
           {serveWindowHint ? <><br />hint: {serveWindowHint}</> : null}
+          {(ball.status === 8 && isYourServe) ? <><br />serve faults now check net / long / wide / wrong-bounce.</> : null}
         </div>
         {showDebugHud && (
           <>

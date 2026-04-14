@@ -313,6 +313,21 @@ export function findTableBounce(path: BallState[]): BallState | undefined {
   return path.find((p, i) => i > 0 && Math.abs(p.z - TABLE.height) < 0.03 && Math.abs(p.x) <= TABLE.width / 2 && Math.abs(p.y) <= TABLE.length / 2)
 }
 
+export function findTableBounces(path: BallState[], maxBounces = 2): BallState[] {
+  const out: BallState[] = []
+  for (let i = 1; i < path.length; i++) {
+    const p = path[i]
+    if (Math.abs(p.z - TABLE.height) < 0.03 && Math.abs(p.x) <= TABLE.width / 2 && Math.abs(p.y) <= TABLE.length / 2) {
+      const prev = out[out.length - 1]
+      if (!prev || Math.abs(prev.y - p.y) > 0.04 || Math.abs(prev.x - p.x) > 0.04) {
+        out.push(p)
+        if (out.length >= maxBounces) break
+      }
+    }
+  }
+  return out
+}
+
 export type PlayerSide = 1 | -1
 export type SwingState = 'idle' | 'backswing' | 'impact' | 'recovery'
 
@@ -366,6 +381,13 @@ export interface ContactPointPrediction {
   etaTicks: number
   playerX: number
   playerY: number
+}
+
+export interface ServeAnalysis {
+  isLegal: boolean
+  reason: 'net' | 'own-side' | 'long' | 'wide'
+  firstBounce?: BallState
+  secondBounce?: BallState
 }
 
 export interface ImpactResult {
@@ -857,6 +879,24 @@ function enforceServeWindow(shot: ShotSolution, ball: BallState, pattern?: Serve
   if (!shot.isServe) return shot
   const landing = clampPlannedLanding(shot.targetX, shot.targetY, 'serve', pattern)
   return solveTargetToVS(ball, landing.x, landing.y, shot.level, shot.spin)
+}
+
+export function analyzeServe(ball: BallState, shot: ShotSolution): ServeAnalysis {
+  if (!shot.isServe) return { isLegal: true, reason: 'long' }
+  const path = sampleTrajectory(applyShot(ball, shot), 240)
+  const bounces = findTableBounces(path, 2)
+  const firstBounce = bounces[0]
+  const secondBounce = bounces[1]
+
+  if (!firstBounce) return { isLegal: false, reason: 'net' }
+  const ownSide = Math.sign(firstBounce.y) === Math.sign(ball.y)
+  if (!ownSide) return { isLegal: false, reason: 'net', firstBounce }
+  if (Math.abs(firstBounce.x) > TABLE.width / 2 - 0.02) return { isLegal: false, reason: 'wide', firstBounce }
+  if (!secondBounce) return { isLegal: false, reason: 'long', firstBounce }
+  const crosses = Math.sign(secondBounce.y) !== Math.sign(ball.y)
+  if (!crosses) return { isLegal: false, reason: 'own-side', firstBounce, secondBounce }
+  if (Math.abs(secondBounce.x) > TABLE.width / 2 - 0.02) return { isLegal: false, reason: 'wide', firstBounce, secondBounce }
+  return { isLegal: true, reason: 'long', firstBounce, secondBounce }
 }
 
 function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
