@@ -889,6 +889,7 @@ export default function App() {
           serve: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
           suggested: {openingPreview.hand} {openingPreview.family}
           {playerContext !== 'rally' ? <><br />opening read: {openingPreview.family} via {openingPreview.hand}</> : null}
+          {playerContext === 'opener' ? <><br />opener shape: {openingPreview.family === 'attack' ? 'flatter / faster' : openingPreview.family === 'cut' ? 'spinnier / safer' : openingPreview.family === 'block' ? 'compact / higher margin' : 'steady topspin'}</> : null}
           {serveWindowHint ? <><br />hint: {serveWindowHint}</> : null}
           {(ball.status === 8 && isYourServe) ? <><br />serve faults now check net / long / wide / wrong-bounce.</> : null}
         </div>

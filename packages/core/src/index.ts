@@ -987,6 +987,27 @@ function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSol
   const bounceShapePenalty = openerAttackWindow
     ? timingPenalty * 0.12 + (fatiguePenalty * 0.08) + attackHeightPenalty * 0.5
     : 0
+  const paceShape = player.plannedFamily === 'attack'
+    ? openerAttackWindow ? 0.16 : 0.12
+    : player.plannedFamily === 'drive'
+      ? player.plannedContext === 'receive' ? 0.03 : 0.05
+      : player.plannedFamily === 'cut'
+        ? -0.15
+        : -0.09
+  const spinShape = player.plannedFamily === 'attack'
+    ? openerAttackWindow ? 0.02 : 0.06
+    : player.plannedFamily === 'drive'
+      ? 0.12
+      : player.plannedFamily === 'cut'
+        ? -0.28
+        : -0.08
+  const netMarginShape = player.plannedFamily === 'attack'
+    ? lowBall ? -0.12 : 0.03
+    : player.plannedFamily === 'drive'
+      ? 0.02
+      : player.plannedFamily === 'cut'
+        ? 0.06
+        : 0.08
   const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7 - fatiguePenalty * 0.45 - attackHeightPenalty - netClearPenalty - bounceShapePenalty
   if (!metrics.reachable || quality < (openerAttackWindow ? 0.24 : pressuredReceive ? 0.2 : 0.16)) return null
 
@@ -1000,16 +1021,25 @@ function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSol
     TABLE.width / 2 - 0.04,
   )
   const adjustedTargetY = clamp(
-    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1) + profile.powerBias * 0.16 + familyPower * 0.12 - attackHeightPenalty * 0.16,
+    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1) + profile.powerBias * 0.16 + familyPower * 0.12 + paceShape * 0.08 - attackHeightPenalty * 0.16,
     shot.targetY >= 0 ? 0.08 : -TABLE.length / 2 + 0.08,
     shot.targetY >= 0 ? TABLE.length / 2 - 0.08 : -0.08,
   )
-  const adjustedLevel = clamp(shot.level + profile.powerBias + familyPower - timingPenalty * 0.18 - distancePenalty * 0.1 - fatiguePenalty * 0.18 - attackHeightPenalty * 0.22 - netClearPenalty * 0.12, 0.32, 1)
-  const adjustedSpin = clamp(shot.spin + profile.spinBias + familySpin - metrics.timingError * 0.9 - metrics.dx * 0.8 - fatiguePenalty * 0.15 - bounceShapePenalty * 0.2, -1.2, 1.2)
+  const adjustedLevel = clamp(shot.level + profile.powerBias + familyPower + paceShape - timingPenalty * 0.18 - distancePenalty * 0.1 - fatiguePenalty * 0.18 - attackHeightPenalty * 0.22 - netClearPenalty * 0.12, 0.32, 1)
+  const adjustedSpin = clamp(shot.spin + profile.spinBias + familySpin + spinShape - metrics.timingError * 0.9 - metrics.dx * 0.8 - fatiguePenalty * 0.15 - bounceShapePenalty * 0.2, -1.2, 1.2)
 
-  return shot.isServe
+  const solved = shot.isServe
     ? solveTargetToVS(ball, adjustedTargetX, adjustedTargetY, adjustedLevel, adjustedSpin)
     : solveTargetToV(ball, adjustedTargetX, adjustedTargetY, adjustedLevel, adjustedSpin)
+
+  if (shot.isServe) return solved
+
+  return {
+    ...solved,
+    vz: solved.vz + netMarginShape,
+    vy: solved.vy * (1 + paceShape * 0.08),
+    spin: clamp(solved.spin + spinShape * 0.4, -1.2, 1.2),
+  }
 }
 
 export function resolveImpact(player: PlayerState, ball: BallState): ImpactResult {
