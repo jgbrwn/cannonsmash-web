@@ -291,7 +291,7 @@ export default function App() {
 
         if (isBallHittableForSide(nextBall, opponent.side) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
-            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined, inferRallyPatternFromShot(lastShot))
+            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined, inferRallyPatternFromShot(lastShot, nextBall))
             const cadence = getCadenceWindow(choice.context, nextOpponent.archetype, choice.stroke.family, choice.stroke.servePattern)
             const commitPhase = choice.context === 'rally'
               ? choice.commitStyle === 'early-take'
@@ -413,7 +413,7 @@ export default function App() {
               fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
               const openingResolved = shouldResolveOpeningPhase(playerContext, nextPlayer.plannedFamily, impact.quality)
-              const nextRallyPattern = inferRallyPatternFromShot(impact.shot)
+              const nextRallyPattern = inferRallyPatternFromShot(impact.shot, nextBall)
               if (playerContext === 'receive') {
                 if (openingResolved) {
                   setLiveServePattern(null)
@@ -489,7 +489,7 @@ export default function App() {
               fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
               const openingResolved = shouldResolveOpeningPhase(nextOpponent.plannedContext, nextOpponent.plannedFamily, impact.quality)
-              const nextRallyPattern = inferRallyPatternFromShot(impact.shot)
+              const nextRallyPattern = inferRallyPatternFromShot(impact.shot, nextBall)
               if (nextOpponent.plannedContext === 'receive') {
                 if (openingResolved) {
                   setLiveServePattern(null)
@@ -983,7 +983,7 @@ export default function App() {
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s · {aiPlanRef.current.context} · {aiPlanRef.current.rallyPattern} · {aiPlanRef.current.family} · {aiPlanRef.current.commitStyle}</div>}
-            {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)}) · {inferRallyPatternFromShot(lastShot) ?? '—'}</div>}
+            {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)}) · {inferRallyPatternFromShot(lastShot, ball) ?? '—'}</div>}
           </>
         )}
       </div>

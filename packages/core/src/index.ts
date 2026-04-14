@@ -1258,7 +1258,7 @@ export function getRallyCommitStyle(
   return 'balanced'
 }
 
-export function inferRallyPatternFromShot(shot: ShotSolution | null): RallyPattern | null {
+export function inferRallyPatternFromShot(shot: ShotSolution | null, sourceBall?: BallState): RallyPattern | null {
   if (!shot) return null
   const widthPressure = Math.abs(shot.targetX) / (TABLE.width / 2)
   const depthPressure = Math.abs(shot.targetY) / (TABLE.length / 2)
@@ -1266,8 +1266,35 @@ export function inferRallyPatternFromShot(shot: ShotSolution | null): RallyPatte
   const topspin = shot.spin > 0.16
   const underspin = shot.spin < -0.18
 
-  if (pace > 0.82 || (depthPressure > 0.72 && widthPressure > 0.34 && topspin)) return 'pressure'
-  if (underspin || (pace < 0.58 && depthPressure < 0.5)) return 'reset'
+  let bounceDepth = depthPressure
+  let bounceWidth = widthPressure
+  let postBouncePace = pace
+  let netClear = 0.12
+
+  if (sourceBall) {
+    const path = sampleTrajectory(applyShot(sourceBall, shot), 220)
+    const bounce = findTableBounce(path)
+    if (bounce) {
+      bounceDepth = Math.abs(bounce.y) / (TABLE.length / 2)
+      bounceWidth = Math.abs(bounce.x) / (TABLE.width / 2)
+      postBouncePace = Math.min(1, Math.hypot(bounce.vx, bounce.vy) / 11.5)
+    }
+    const netSample = path.find((p) => Math.abs(p.y) < 0.03)
+    if (netSample) netClear = netSample.z - TABLE.height - TABLE.netHeight
+  }
+
+  if (
+    postBouncePace > 0.74 ||
+    (bounceDepth > 0.7 && bounceWidth > 0.28 && topspin) ||
+    (pace > 0.82 && netClear < 0.14)
+  ) return 'pressure'
+
+  if (
+    underspin ||
+    (postBouncePace < 0.5 && bounceDepth < 0.54) ||
+    netClear > 0.22
+  ) return 'reset'
+
   return 'counter'
 }
 
