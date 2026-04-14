@@ -409,6 +409,8 @@ export type StrokeContext = 'serve' | 'receive' | 'opener' | 'rally'
 export type ServePattern = 'short-spin' | 'fast-long' | 'wide-setup'
 export type ReceivePressure = 'low' | 'medium' | 'high'
 
+export type RallyPattern = 'counter' | 'pressure' | 'reset'
+
 export interface AITargetChoice {
   stroke: PlannedStroke
   score: number
@@ -418,7 +420,7 @@ export interface AITargetChoice {
   context: StrokeContext
   thirdBallAttack: boolean
   commitStyle: 'early-take' | 'balanced' | 'late-read'
-  rallyPattern: 'counter' | 'pressure' | 'reset'
+  rallyPattern: RallyPattern
 }
 
 export interface ArchetypeProfile {
@@ -1256,14 +1258,41 @@ function getRallyCommitStyle(
   return 'balanced'
 }
 
+export function inferRallyPatternFromShot(shot: ShotSolution | null): RallyPattern | null {
+  if (!shot) return null
+  const widthPressure = Math.abs(shot.targetX) / (TABLE.width / 2)
+  const depthPressure = Math.abs(shot.targetY) / (TABLE.length / 2)
+  const pace = shot.level
+  const topspin = shot.spin > 0.16
+  const underspin = shot.spin < -0.18
+
+  if (pace > 0.82 || (depthPressure > 0.72 && widthPressure > 0.34 && topspin)) return 'pressure'
+  if (underspin || (pace < 0.58 && depthPressure < 0.5)) return 'reset'
+  return 'counter'
+}
+
 function chooseRallyPattern(
   player: PlayerState,
   family: ShotFamily,
   ball: BallState,
-): 'counter' | 'pressure' | 'reset' {
+  incomingPattern: RallyPattern | null,
+): RallyPattern {
   const statusRatio = getStatusRatio(player)
   const highBall = ball.z > TABLE.height + 0.36
   const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+
+  if (incomingPattern === 'pressure') {
+    if (family === 'block') return 'counter'
+    if (family === 'cut') return 'reset'
+    if (family === 'drive') return player.archetype === 'PenAttack' && statusRatio > 0.58 ? 'pressure' : 'counter'
+    return highBall && statusRatio > 0.54 ? 'pressure' : 'counter'
+  }
+
+  if (incomingPattern === 'reset') {
+    if (family === 'attack') return highBall && statusRatio > 0.42 ? 'pressure' : 'counter'
+    if (family === 'drive') return player.archetype === 'ShakeCut' ? 'reset' : 'pressure'
+    return family === 'cut' ? 'reset' : 'counter'
+  }
 
   if (family === 'attack') return highBall && statusRatio > 0.48 ? 'pressure' : 'counter'
   if (family === 'block') return closeToTable ? 'counter' : 'reset'
@@ -1343,7 +1372,12 @@ function evaluateAIReturn(player: PlayerState, stroke: PlannedStroke, attack: bo
   return score
 }
 
-export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomingServePattern?: ServePattern): AITargetChoice {
+export function chooseAIReturnShot(
+  player: PlayerState,
+  ball: BallState,
+  incomingServePattern?: ServePattern,
+  incomingRallyPattern: RallyPattern | null = null,
+): AITargetChoice {
   const side = player.side
   const lane = side > 0 ? -1 : 1
   const profile = getArchetypeProfile(player)
@@ -1383,7 +1417,7 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomin
   const hand = getHandSideForBall(player, ball)
   const family = chooseRallyFamily(player, ball, hand)
   const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
-  const rallyPattern = chooseRallyPattern(player, family, ball)
+  const rallyPattern = chooseRallyPattern(player, family, ball, incomingRallyPattern)
   const xs = family === 'attack'
     ? [-0.44, -0.24, 0.24, 0.44].map((f) => f * (TABLE.width / 2))
     : family === 'block'

@@ -23,6 +23,7 @@ import {
   getPlayerStanceOffset,
   getStatusRatio,
   getSwingImpactTick,
+  inferRallyPatternFromShot,
   isBallHittableForSide,
   pickAIMoveTarget,
   predictContactPoint,
@@ -38,6 +39,7 @@ import {
   type PlayerArchetype,
   type PlayerState,
   type ReceivePressure,
+  type RallyPattern,
   type ShotFamily,
   type ShotSolution,
   type ServePattern,
@@ -67,7 +69,7 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
-  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean; commitStyle: 'early-take' | 'balanced' | 'late-read'; rallyPattern: 'counter' | 'pressure' | 'reset' } | null>(null)
+  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean; commitStyle: 'early-take' | 'balanced' | 'late-read'; rallyPattern: RallyPattern } | null>(null)
   const fxRef = useRef({ flash: 0, pulse: 0, bounce: 0, pulseColor: '#7ed7ff' })
   const audioRef = useRef<AudioContext | null>(null)
   const audioEnabledRef = useRef(false)
@@ -86,6 +88,7 @@ export default function App() {
   const [level, setLevel] = useState(0.8)
   const [serveMode, setServeMode] = useState(false)
   const [lastShot, setLastShot] = useState<ShotSolution | null>(null)
+  const [liveRallyPattern, setLiveRallyPattern] = useState<RallyPattern | null>(null)
   const [shotQueued, setShotQueued] = useState<ShotSolution | null>(null)
   const [score, setScore] = useState({ you: 0, opp: 0 })
   const [match, setMatch] = useState<MatchState>({
@@ -233,6 +236,7 @@ export default function App() {
         aiCooldownRef.current = 0
         setLiveServePattern(null)
         setLiveReceivePressure(null)
+        setLiveRallyPattern(null)
         setServeWindowHint(null)
         playTone(audioRef, audioEnabledRef, pointMessage.includes('Game to') ? 460 : pointMessage.includes('Match to') ? 620 : 360, pointMessage.includes('Game to') ? 0.12 : pointMessage.includes('Match to') ? 0.18 : 0.08, 'sawtooth', 0.018)
         if (pointMessage.includes('Game to') || pointMessage.includes('Match to')) {
@@ -257,7 +261,7 @@ export default function App() {
               setMatch((m) => ({ ...m, gameOver: false, winner: null }))
             }
             const serveBall = tossForServe(opponent.side)
-            const serveChoice = chooseAIReturnShot(nextOpponent, serveBall)
+            const serveChoice = chooseAIReturnShot(nextOpponent, serveBall, undefined, liveRallyPattern)
             nextBall = serveBall
             nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand, serveChoice.stroke.servePattern ?? null, serveChoice.stroke.receivePressure ?? null, serveChoice.context)
             setLiveServePattern(serveChoice.stroke.servePattern ?? null)
@@ -280,7 +284,7 @@ export default function App() {
 
         if (isBallHittableForSide(nextBall, opponent.side) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
-            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined)
+            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined, inferRallyPatternFromShot(lastShot))
             const cadence = getCadenceWindow(choice.context, nextOpponent.archetype, choice.stroke.family, choice.stroke.servePattern)
             const commitPhase = choice.context === 'rally'
               ? choice.commitStyle === 'early-take'
@@ -389,6 +393,7 @@ export default function App() {
                 playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
                 setLiveServePattern(openingPreview.servePattern ?? null)
                 setLiveReceivePressure(null)
+                setLiveRallyPattern(null)
                 nextMessage = impact.quality > 0.72 && openingPreview.servePattern
                   ? `Clean ${openingPreview.servePattern} serve.`
                   : 'Legal serve in.'
@@ -401,14 +406,19 @@ export default function App() {
               fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
               const openingResolved = shouldResolveOpeningPhase(playerContext, nextPlayer.plannedFamily, impact.quality)
+              const nextRallyPattern = inferRallyPatternFromShot(impact.shot)
               if (playerContext === 'receive') {
                 if (openingResolved) {
                   setLiveServePattern(null)
                   setLiveReceivePressure(null)
+                  setLiveRallyPattern(nextRallyPattern)
                 } else {
                   setLiveServePattern(null)
                   setLiveReceivePressure(openingPreview.receivePressure ?? null)
+                  setLiveRallyPattern(null)
                 }
+              } else if (playerContext === 'rally') {
+                setLiveRallyPattern(nextRallyPattern)
               }
               nextMessage = openingResolved && playerContext !== 'rally'
                 ? playerContext === 'receive'
@@ -460,6 +470,7 @@ export default function App() {
                 playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
                 setLiveServePattern(nextOpponent.plannedServePattern ?? null)
                 setLiveReceivePressure(null)
+                setLiveRallyPattern(null)
                 nextMessage = impact.quality > 0.72 && nextOpponent.plannedServePattern
                   ? `Opponent lands a ${nextOpponent.plannedServePattern} serve.`
                   : 'Opponent gets a legal serve in.'
@@ -471,14 +482,19 @@ export default function App() {
               fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
               const openingResolved = shouldResolveOpeningPhase(nextOpponent.plannedContext, nextOpponent.plannedFamily, impact.quality)
+              const nextRallyPattern = inferRallyPatternFromShot(impact.shot)
               if (nextOpponent.plannedContext === 'receive') {
                 if (openingResolved) {
                   setLiveServePattern(null)
                   setLiveReceivePressure(null)
+                  setLiveRallyPattern(nextRallyPattern)
                 } else {
                   setLiveServePattern(null)
                   setLiveReceivePressure(choicePressure(nextOpponent.plannedFamily, liveServePattern))
+                  setLiveRallyPattern(null)
                 }
+              } else if (nextOpponent.plannedContext === 'rally') {
+                setLiveRallyPattern(nextRallyPattern)
               }
               nextMessage = openingResolved && nextOpponent.plannedContext !== 'rally'
                 ? nextOpponent.plannedContext === 'receive'
@@ -791,6 +807,7 @@ export default function App() {
       transitionText: null,
     })
     setLastShot(null)
+    setLiveRallyPattern(null)
     setShotQueued(null)
     setLiveServePattern(null)
     setLiveReceivePressure(null)
@@ -868,6 +885,7 @@ export default function App() {
               <div>opening bias: {assistOpeningBias ? 'on' : 'off'}</div>
               <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
               <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
+              <div>rally pattern: {liveRallyPattern ?? 'none'}</div>
               <div>opening active: {playerContext === 'receive' || playerContext === 'opener' ? 'yes' : 'no'}</div>
               <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
               <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
@@ -942,7 +960,7 @@ export default function App() {
           suggested: {openingPreview.hand} {openingPreview.family}
           {playerContext !== 'rally' ? <><br />opening read: {openingPreview.family} via {openingPreview.hand}</> : null}
           {playerContext === 'opener' ? <><br />opener shape: {openingPreview.family === 'attack' ? 'flatter / faster' : openingPreview.family === 'cut' ? 'spinnier / safer' : openingPreview.family === 'block' ? 'compact / higher margin' : 'steady topspin'}</> : null}
-          {playerContext === 'rally' ? <><br />rally read: {openingPreview.family === 'attack' ? 'pressure / counter hit' : openingPreview.family === 'drive' ? 'topspin exchange' : openingPreview.family === 'block' ? 'compact counter / block' : 'reset / chop pressure'}</> : null}
+          {playerContext === 'rally' ? <><br />rally read: {liveRallyPattern === 'pressure' ? 'under pressure / look to counter or block' : liveRallyPattern === 'reset' ? 'reset ball / chance to reopen' : openingPreview.family === 'attack' ? 'pressure / counter hit' : openingPreview.family === 'drive' ? 'topspin exchange' : openingPreview.family === 'block' ? 'compact counter / block' : 'reset / chop pressure'}</> : null}
           {serveWindowHint ? <><br />hint: {serveWindowHint}</> : null}
           {(ball.status === 8 && isYourServe) ? <><br />serve faults now check net / long / wide / wrong-bounce.</> : null}
         </div>
@@ -955,7 +973,7 @@ export default function App() {
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s · {aiPlanRef.current.context} · {aiPlanRef.current.rallyPattern} · {aiPlanRef.current.family} · {aiPlanRef.current.commitStyle}</div>}
-            {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
+            {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)}) · {inferRallyPatternFromShot(lastShot) ?? '—'}</div>}
           </>
         )}
       </div>
