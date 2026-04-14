@@ -67,7 +67,7 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
-  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean; commitStyle: 'early-take' | 'balanced' | 'late-read' } | null>(null)
+  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean; commitStyle: 'early-take' | 'balanced' | 'late-read'; rallyPattern: 'counter' | 'pressure' | 'reset' } | null>(null)
   const fxRef = useRef({ flash: 0, pulse: 0, bounce: 0, pulseColor: '#7ed7ff' })
   const audioRef = useRef<AudioContext | null>(null)
   const audioEnabledRef = useRef(false)
@@ -313,18 +313,19 @@ export default function App() {
               servePattern: choice.stroke.servePattern,
               thirdBallAttack: choice.thirdBallAttack,
               commitStyle: choice.commitStyle,
+              rallyPattern: choice.rallyPattern,
             }
             nextMessage = choice.context === 'receive'
               ? `Opponent shapes a ${choice.stroke.family} receive${liveServePattern ? ` vs ${liveServePattern}` : ''}...`
               : choice.context === 'opener'
                 ? `Opponent looks for a ${choice.stroke.family} opener on the ${cadence.contactPhase.replace('-', ' ')}...`
                 : choice.commitStyle === 'early-take'
-                  ? `Opponent steps in early for a ${choice.stroke.hand} ${choice.stroke.family}...`
+                  ? `Opponent steps in early for a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
                   : choice.commitStyle === 'late-read'
-                    ? `Opponent waits on a ${choice.stroke.hand} ${choice.stroke.family}...`
+                    ? `Opponent waits on a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
                     : choice.attack
-                      ? `Opponent lines up a ${choice.stroke.hand} ${choice.stroke.family}...`
-                      : `Opponent reads a ${choice.stroke.hand} ${choice.stroke.family}...`
+                      ? `Opponent lines up a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
+                      : `Opponent reads a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
           }
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
@@ -344,12 +345,12 @@ export default function App() {
                     ? 'Opponent jumps on the planned third-ball attack early!'
                     : 'Opponent jumps on the first attack phase!'
                   : aiPlanRef.current.commitStyle === 'early-take'
-                    ? `Opponent takes the ${aiPlanRef.current.hand} ${aiPlanRef.current.family} early.`
+                    ? `Opponent takes the ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family} early.`
                     : aiPlanRef.current.commitStyle === 'late-read'
-                      ? `Opponent hangs back and rolls a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
+                      ? `Opponent hangs back and plays a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
                       : aiPlanRef.current.attack
-                        ? `Opponent commits into a ${aiPlanRef.current.hand} attack!`
-                        : `Opponent settles into a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
+                        ? `Opponent commits into a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} attack!`
+                        : `Opponent settles into a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
               aiPlanRef.current = null
             }
           }
@@ -874,7 +875,7 @@ export default function App() {
               <div>your pressure: {player.plannedReceivePressure ?? 'none'}</div>
               <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
               <div>opp pressure: {opponent.plannedReceivePressure ?? 'none'}</div>
-              <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}{aiPlanRef.current ? ` · ${aiPlanRef.current.family} · ${aiPlanRef.current.commitStyle}` : ''}</div>
+              <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}{aiPlanRef.current ? ` · ${aiPlanRef.current.rallyPattern} · ${aiPlanRef.current.family} · ${aiPlanRef.current.commitStyle}` : ''}</div>
             </div>
           )}
         </div>
@@ -941,6 +942,7 @@ export default function App() {
           suggested: {openingPreview.hand} {openingPreview.family}
           {playerContext !== 'rally' ? <><br />opening read: {openingPreview.family} via {openingPreview.hand}</> : null}
           {playerContext === 'opener' ? <><br />opener shape: {openingPreview.family === 'attack' ? 'flatter / faster' : openingPreview.family === 'cut' ? 'spinnier / safer' : openingPreview.family === 'block' ? 'compact / higher margin' : 'steady topspin'}</> : null}
+          {playerContext === 'rally' ? <><br />rally read: {openingPreview.family === 'attack' ? 'pressure / counter hit' : openingPreview.family === 'drive' ? 'topspin exchange' : openingPreview.family === 'block' ? 'compact counter / block' : 'reset / chop pressure'}</> : null}
           {serveWindowHint ? <><br />hint: {serveWindowHint}</> : null}
           {(ball.status === 8 && isYourServe) ? <><br />serve faults now check net / long / wide / wrong-bounce.</> : null}
         </div>
@@ -952,7 +954,7 @@ export default function App() {
             </div>
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
-            {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s · {aiPlanRef.current.context} · {aiPlanRef.current.family} · {aiPlanRef.current.commitStyle}</div>}
+            {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s · {aiPlanRef.current.context} · {aiPlanRef.current.rallyPattern} · {aiPlanRef.current.family} · {aiPlanRef.current.commitStyle}</div>}
             {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
           </>
         )}

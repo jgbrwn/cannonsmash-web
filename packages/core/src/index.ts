@@ -418,6 +418,7 @@ export interface AITargetChoice {
   context: StrokeContext
   thirdBallAttack: boolean
   commitStyle: 'early-take' | 'balanced' | 'late-read'
+  rallyPattern: 'counter' | 'pressure' | 'reset'
 }
 
 export interface ArchetypeProfile {
@@ -1255,11 +1256,29 @@ function getRallyCommitStyle(
   return 'balanced'
 }
 
+function chooseRallyPattern(
+  player: PlayerState,
+  family: ShotFamily,
+  ball: BallState,
+): 'counter' | 'pressure' | 'reset' {
+  const statusRatio = getStatusRatio(player)
+  const highBall = ball.z > TABLE.height + 0.36
+  const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+
+  if (family === 'attack') return highBall && statusRatio > 0.48 ? 'pressure' : 'counter'
+  if (family === 'block') return closeToTable ? 'counter' : 'reset'
+  if (family === 'cut') return statusRatio > 0.45 ? 'reset' : 'counter'
+  if (player.archetype === 'PenAttack' && statusRatio > 0.52) return 'pressure'
+  if (player.archetype === 'ShakeCut') return 'reset'
+  return closeToTable ? 'counter' : 'pressure'
+}
+
 function applyRallyFamilyPlan(
   player: PlayerState,
   ball: BallState,
   hand: HandSide,
   family: ShotFamily,
+  rallyPattern: 'counter' | 'pressure' | 'reset',
   targetX: number,
   targetY: number,
 ): PlannedStroke {
@@ -1272,25 +1291,25 @@ function applyRallyFamilyPlan(
   let spin = profile.spinBias
 
   if (family === 'attack') {
-    level += 0.16
-    spin += 0.08
-    nextTargetY = lane * TABLE.length * (highBall ? 0.4 : 0.36)
-    nextTargetX = clamp(targetX * 1.12 + player.side * 0.06, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    level += rallyPattern === 'pressure' ? 0.2 : 0.14
+    spin += rallyPattern === 'pressure' ? 0.12 : 0.06
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'pressure' ? (highBall ? 0.43 : 0.39) : 0.35)
+    nextTargetX = clamp(targetX * (rallyPattern === 'pressure' ? 1.18 : 1.04) + player.side * 0.06, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
   } else if (family === 'drive') {
-    level += 0.06
-    spin += player.archetype === 'ShakeCut' ? 0.02 : 0.16
-    nextTargetY = lane * TABLE.length * 0.34
-    nextTargetX = clamp(targetX * 0.88, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    level += rallyPattern === 'pressure' ? 0.1 : rallyPattern === 'reset' ? 0.02 : 0.06
+    spin += rallyPattern === 'reset' ? 0.1 : player.archetype === 'ShakeCut' ? 0.02 : 0.16
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'reset' ? 0.29 : rallyPattern === 'pressure' ? 0.37 : 0.33)
+    nextTargetX = clamp(targetX * (rallyPattern === 'counter' ? 0.96 : 0.82), -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
   } else if (family === 'block') {
-    level -= 0.03
-    spin += player.archetype === 'ShakeCut' ? -0.08 : -0.02
-    nextTargetY = lane * TABLE.length * 0.26
-    nextTargetX = clamp(-targetX * 0.72 + (hand === 'backhand' ? -player.side * 0.04 : player.side * 0.04), -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    level += rallyPattern === 'counter' ? 0 : -0.05
+    spin += rallyPattern === 'reset' ? -0.08 : player.archetype === 'ShakeCut' ? -0.08 : -0.02
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'reset' ? 0.22 : 0.27)
+    nextTargetX = clamp(-targetX * (rallyPattern === 'counter' ? 0.82 : 0.62) + (hand === 'backhand' ? -player.side * 0.04 : player.side * 0.04), -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
   } else {
-    level -= 0.12
-    spin -= 0.26
-    nextTargetY = lane * TABLE.length * 0.23
-    nextTargetX = clamp(-targetX * 0.56 - player.side * 0.05, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+    level -= rallyPattern === 'reset' ? 0.14 : 0.09
+    spin -= rallyPattern === 'counter' ? 0.2 : 0.3
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'counter' ? 0.25 : 0.21)
+    nextTargetX = clamp(-targetX * (rallyPattern === 'counter' ? 0.66 : 0.5) - player.side * 0.05, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
   }
 
   const shot = solveTargetToV(ball, nextTargetX, nextTargetY, clamp(level, 0.38, 1), clamp(spin, -1.2, 1.2))
@@ -1356,6 +1375,7 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomin
       context,
       thirdBallAttack,
       commitStyle: stroke.family === 'attack' ? 'early-take' : stroke.family === 'cut' ? 'late-read' : 'balanced',
+      rallyPattern: 'counter',
     }
   }
 
@@ -1363,6 +1383,7 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomin
   const hand = getHandSideForBall(player, ball)
   const family = chooseRallyFamily(player, ball, hand)
   const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
+  const rallyPattern = chooseRallyPattern(player, family, ball)
   const xs = family === 'attack'
     ? [-0.44, -0.24, 0.24, 0.44].map((f) => f * (TABLE.width / 2))
     : family === 'block'
@@ -1380,7 +1401,7 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomin
 
   for (const targetX of xs) {
     for (const targetY of ys) {
-      const stroke = applyRallyFamilyPlan(player, ball, hand, family, targetX, targetY)
+      const stroke = applyRallyFamilyPlan(player, ball, hand, family, rallyPattern, targetX, targetY)
       const path = sampleTrajectory(applyShot(ball, stroke.shot), 200)
       const bounce = findTableBounce(path)
       if (!bounce) continue
@@ -1391,11 +1412,14 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomin
       if (family === 'drive') score += Math.abs(targetX) / (TABLE.width / 2) * 0.04 + 0.05
       if (family === 'block') score += (1 - Math.abs(targetY) / (TABLE.length / 2)) * 0.08
       if (family === 'cut') score += (1 - Math.abs(targetY) / (TABLE.length / 2)) * 0.1 + (player.archetype === 'ShakeCut' ? 0.08 : 0)
-      if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack: family === 'attack', context, thirdBallAttack, commitStyle }
+      if (rallyPattern === 'pressure') score += family === 'attack' || family === 'drive' ? 0.12 : -0.04
+      if (rallyPattern === 'counter') score += family === 'block' || family === 'drive' ? 0.08 : 0.02
+      if (rallyPattern === 'reset') score += family === 'cut' || family === 'block' ? 0.1 : -0.03
+      if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack: family === 'attack', context, thirdBallAttack, commitStyle, rallyPattern }
     }
   }
 
   if (best) return best
-  const fallback = applyRallyFamilyPlan(player, ball, hand, family, 0, lane * TABLE.length * 0.28)
-  return { stroke: fallback, score: -1, targetX: 0, targetY: lane * TABLE.length * 0.28, attack: family === 'attack', context, thirdBallAttack, commitStyle }
+  const fallback = applyRallyFamilyPlan(player, ball, hand, family, rallyPattern, 0, lane * TABLE.length * 0.28)
+  return { stroke: fallback, score: -1, targetX: 0, targetY: lane * TABLE.length * 0.28, attack: family === 'attack', context, thirdBallAttack, commitStyle, rallyPattern }
 }
