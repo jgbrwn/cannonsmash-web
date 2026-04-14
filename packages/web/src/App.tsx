@@ -67,7 +67,7 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
   const aiCooldownRef = useRef(0)
-  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean } | null>(null)
+  const aiPlanRef = useRef<{ swingAt: number; shot: ShotSolution; attack: boolean; family: ShotFamily; hand: HandSide; context: 'serve' | 'receive' | 'opener' | 'rally'; servePattern?: ServePattern; thirdBallAttack: boolean; commitStyle: 'early-take' | 'balanced' | 'late-read' } | null>(null)
   const fxRef = useRef({ flash: 0, pulse: 0, bounce: 0, pulseColor: '#7ed7ff' })
   const audioRef = useRef<AudioContext | null>(null)
   const audioEnabledRef = useRef(false)
@@ -282,8 +282,22 @@ export default function App() {
           if (!aiPlanRef.current) {
             const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined)
             const cadence = getCadenceWindow(choice.context, nextOpponent.archetype, choice.stroke.family, choice.stroke.servePattern)
-            const contactPlan = findContactPointForPhase(nextBall, nextOpponent.side, cadence.contactPhase, 180, choice.stroke.hand)
-            const lateDecision = getDecisionLeadTicks(choice.context, nextOpponent.archetype, choice.stroke.servePattern)
+            const commitPhase = choice.context === 'rally'
+              ? choice.commitStyle === 'early-take'
+                ? (choice.stroke.family === 'attack' || choice.stroke.family === 'block' ? 'early-rise' : cadence.contactPhase)
+                : choice.commitStyle === 'late-read'
+                  ? (choice.stroke.family === 'cut' ? 'late-fall' : 'peak')
+                  : cadence.contactPhase
+              : cadence.contactPhase
+            const contactPlan = findContactPointForPhase(nextBall, nextOpponent.side, commitPhase, 180, choice.stroke.hand)
+            const baseLead = getDecisionLeadTicks(choice.context, nextOpponent.archetype, choice.stroke.servePattern)
+            const lateDecision = choice.context === 'rally'
+              ? choice.commitStyle === 'early-take'
+                ? Math.max(8, baseLead - 4)
+                : choice.commitStyle === 'late-read'
+                  ? baseLead + 2
+                  : baseLead
+              : baseLead
             const impactTick = getSwingImpactTick(choice.context, choice.stroke.family)
             const planTicks = Math.max(1, (contactPlan?.etaTicks ?? oppPlan?.etaTicks ?? impactTick) - lateDecision)
             if (contactPlan) {
@@ -298,29 +312,44 @@ export default function App() {
               context: choice.context,
               servePattern: choice.stroke.servePattern,
               thirdBallAttack: choice.thirdBallAttack,
+              commitStyle: choice.commitStyle,
             }
             nextMessage = choice.context === 'receive'
               ? `Opponent shapes a ${choice.stroke.family} receive${liveServePattern ? ` vs ${liveServePattern}` : ''}...`
               : choice.context === 'opener'
                 ? `Opponent looks for a ${choice.stroke.family} opener on the ${cadence.contactPhase.replace('-', ' ')}...`
-                : choice.attack
-                  ? `Opponent lines up a ${choice.stroke.hand} ${choice.stroke.family}...`
-                  : `Opponent reads a ${choice.stroke.hand} ${choice.stroke.family}...`
+                : choice.commitStyle === 'early-take'
+                  ? `Opponent steps in early for a ${choice.stroke.hand} ${choice.stroke.family}...`
+                  : choice.commitStyle === 'late-read'
+                    ? `Opponent waits on a ${choice.stroke.hand} ${choice.stroke.family}...`
+                    : choice.attack
+                      ? `Opponent lines up a ${choice.stroke.hand} ${choice.stroke.family}...`
+                      : `Opponent reads a ${choice.stroke.hand} ${choice.stroke.family}...`
           }
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
             if (aiPlanRef.current.swingAt <= 0 && aiCooldownRef.current === 0) {
               nextOpponent = startSwing(nextOpponent, aiPlanRef.current.shot, aiPlanRef.current.family, aiPlanRef.current.hand, aiPlanRef.current.servePattern ?? null, liveReceivePressure, aiPlanRef.current.context)
-              aiCooldownRef.current = aiPlanRef.current.context === 'rally' ? 65 : 54
+              aiCooldownRef.current = aiPlanRef.current.context === 'rally'
+                ? aiPlanRef.current.commitStyle === 'early-take'
+                  ? 56
+                  : aiPlanRef.current.commitStyle === 'late-read'
+                    ? 70
+                    : 63
+                : 54
               nextMessage = aiPlanRef.current.context === 'receive'
                 ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
                 : aiPlanRef.current.context === 'opener'
                   ? aiPlanRef.current.thirdBallAttack
                     ? 'Opponent jumps on the planned third-ball attack early!'
                     : 'Opponent jumps on the first attack phase!'
-                  : aiPlanRef.current.attack
-                    ? `Opponent commits late to a ${aiPlanRef.current.hand} attack!`
-                    : `Opponent commits late to a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
+                  : aiPlanRef.current.commitStyle === 'early-take'
+                    ? `Opponent takes the ${aiPlanRef.current.hand} ${aiPlanRef.current.family} early.`
+                    : aiPlanRef.current.commitStyle === 'late-read'
+                      ? `Opponent hangs back and rolls a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
+                      : aiPlanRef.current.attack
+                        ? `Opponent commits into a ${aiPlanRef.current.hand} attack!`
+                        : `Opponent settles into a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
               aiPlanRef.current = null
             }
           }
@@ -845,7 +874,7 @@ export default function App() {
               <div>your pressure: {player.plannedReceivePressure ?? 'none'}</div>
               <div>opp swing: {opponent.swingState} @ {opponent.swingTimer} · {opponent.plannedHand} {opponent.plannedFamily}</div>
               <div>opp pressure: {opponent.plannedReceivePressure ?? 'none'}</div>
-              <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}</div>
+              <div>opp plan: {aiPlanRef.current?.context ?? 'idle'}{aiPlanRef.current ? ` · ${aiPlanRef.current.family} · ${aiPlanRef.current.commitStyle}` : ''}</div>
             </div>
           )}
         </div>
@@ -923,7 +952,7 @@ export default function App() {
             </div>
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
-            {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s · {aiPlanRef.current.context}</div>}
+            {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s · {aiPlanRef.current.context} · {aiPlanRef.current.family} · {aiPlanRef.current.commitStyle}</div>}
             {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
           </>
         )}

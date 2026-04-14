@@ -417,6 +417,7 @@ export interface AITargetChoice {
   attack: boolean
   context: StrokeContext
   thirdBallAttack: boolean
+  commitStyle: 'early-take' | 'balanced' | 'late-read'
 }
 
 export interface ArchetypeProfile {
@@ -766,10 +767,31 @@ export function getCadenceWindow(
       contactPhase: family === 'attack' ? 'early-rise' : 'peak',
     }
   }
+  if (family === 'attack') {
+    return {
+      decisionLeadTicks: archetype === 'PenAttack' ? 17 : archetype === 'PenDrive' ? 18 : 19,
+      impactTick: 20,
+      contactPhase: 'early-rise',
+    }
+  }
+  if (family === 'drive') {
+    return {
+      decisionLeadTicks: archetype === 'PenAttack' ? 18 : archetype === 'ShakeCut' ? 19 : 17,
+      impactTick: 19,
+      contactPhase: 'peak',
+    }
+  }
+  if (family === 'block') {
+    return {
+      decisionLeadTicks: archetype === 'PenDrive' ? 16 : 17,
+      impactTick: 18,
+      contactPhase: 'early-rise',
+    }
+  }
   return {
-    decisionLeadTicks: archetype === 'PenAttack' ? 19 : archetype === 'ShakeCut' ? 20 : 18,
-    impactTick: family === 'attack' ? 20 : 19,
-    contactPhase: family === 'attack' ? 'early-rise' : 'late-fall',
+    decisionLeadTicks: archetype === 'ShakeCut' ? 18 : 19,
+    impactTick: 19,
+    contactPhase: 'late-fall',
   }
 }
 
@@ -1194,6 +1216,87 @@ function isAttackableBall(ball: BallState, side: PlayerSide): boolean {
   return ball.z > TABLE.height + 0.34 && ((side === 1 && ball.y < -0.2) || (side === -1 && ball.y > 0.2))
 }
 
+function chooseRallyFamily(player: PlayerState, ball: BallState, hand: HandSide): ShotFamily {
+  const statusRatio = getStatusRatio(player)
+  const highBall = ball.z > TABLE.height + 0.36
+  const lowBall = ball.z < TABLE.height + 0.2
+  const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+
+  if (player.archetype === 'PenAttack') {
+    if (hand === 'forehand' && highBall && statusRatio > 0.34) return 'attack'
+    if (hand === 'backhand' && closeToTable) return statusRatio > 0.46 ? 'block' : 'drive'
+    return hand === 'forehand' ? 'drive' : 'block'
+  }
+
+  if (player.archetype === 'PenDrive') {
+    if (hand === 'forehand' && highBall && statusRatio > 0.5) return 'attack'
+    if (hand === 'backhand' || closeToTable) return 'block'
+    return lowBall ? 'block' : 'drive'
+  }
+
+  if (highBall && hand === 'forehand' && statusRatio > 0.62) return 'drive'
+  if (closeToTable || hand === 'backhand') return 'block'
+  return lowBall ? 'cut' : 'block'
+}
+
+function getRallyCommitStyle(
+  archetype: PlayerArchetype,
+  family: ShotFamily,
+  hand: HandSide,
+  ball: BallState,
+): 'early-take' | 'balanced' | 'late-read' {
+  const highBall = ball.z > TABLE.height + 0.36
+  const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+  if (family === 'attack') return archetype === 'PenAttack' || highBall ? 'early-take' : 'balanced'
+  if (family === 'block') return closeToTable || archetype === 'PenDrive' ? 'early-take' : 'balanced'
+  if (family === 'cut') return 'late-read'
+  if (archetype === 'ShakeCut') return 'late-read'
+  if (hand === 'backhand' && closeToTable) return 'early-take'
+  return 'balanced'
+}
+
+function applyRallyFamilyPlan(
+  player: PlayerState,
+  ball: BallState,
+  hand: HandSide,
+  family: ShotFamily,
+  targetX: number,
+  targetY: number,
+): PlannedStroke {
+  const profile = getArchetypeProfile(player)
+  const lane = player.side > 0 ? -1 : 1
+  const highBall = ball.z > TABLE.height + 0.36
+  let nextTargetX = targetX
+  let nextTargetY = targetY
+  let level = 0.68 + profile.powerBias * 0.45
+  let spin = profile.spinBias
+
+  if (family === 'attack') {
+    level += 0.16
+    spin += 0.08
+    nextTargetY = lane * TABLE.length * (highBall ? 0.4 : 0.36)
+    nextTargetX = clamp(targetX * 1.12 + player.side * 0.06, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  } else if (family === 'drive') {
+    level += 0.06
+    spin += player.archetype === 'ShakeCut' ? 0.02 : 0.16
+    nextTargetY = lane * TABLE.length * 0.34
+    nextTargetX = clamp(targetX * 0.88, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  } else if (family === 'block') {
+    level -= 0.03
+    spin += player.archetype === 'ShakeCut' ? -0.08 : -0.02
+    nextTargetY = lane * TABLE.length * 0.26
+    nextTargetX = clamp(-targetX * 0.72 + (hand === 'backhand' ? -player.side * 0.04 : player.side * 0.04), -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  } else {
+    level -= 0.12
+    spin -= 0.26
+    nextTargetY = lane * TABLE.length * 0.23
+    nextTargetX = clamp(-targetX * 0.56 - player.side * 0.05, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  }
+
+  const shot = solveTargetToV(ball, nextTargetX, nextTargetY, clamp(level, 0.38, 1), clamp(spin, -1.2, 1.2))
+  return { shot, family, hand }
+}
+
 function evaluateAIReturn(player: PlayerState, stroke: PlannedStroke, attack: boolean, context: StrokeContext, thirdBallAttack: boolean): number {
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
@@ -1244,39 +1347,55 @@ export function chooseAIReturnShot(player: PlayerState, ball: BallState, incomin
           : -side * 0.12
     const openerY = lane * TABLE.length * (context === 'serve' ? 0.18 : context === 'receive' ? 0.24 : 0.34)
     const stroke = buildOpeningStrokePlan(player, ball, openerX, openerY, context, incomingServePattern)
-    return { stroke, score: evaluateAIReturn(player, stroke, attack, context, thirdBallAttack), targetX: openerX, targetY: openerY, attack, context, thirdBallAttack }
+    return {
+      stroke,
+      score: evaluateAIReturn(player, stroke, attack, context, thirdBallAttack),
+      targetX: openerX,
+      targetY: openerY,
+      attack,
+      context,
+      thirdBallAttack,
+      commitStyle: stroke.family === 'attack' ? 'early-take' : stroke.family === 'cut' ? 'late-read' : 'balanced',
+    }
   }
 
   let best: AITargetChoice | null = null
-  const xs = [-0.42, -0.22, 0, 0.22, 0.42].map((f) => f * (TABLE.width / 2))
-  const ys = attack
-    ? [0.28, 0.36, 0.43].map((f) => lane * TABLE.length * f)
-    : [0.18, 0.24, 0.31, 0.37].map((f) => lane * TABLE.length * f)
-  const spins = attack
-    ? [profile.spinBias + 0.05, profile.spinBias + 0.22]
-    : [profile.spinBias - 0.18, profile.spinBias + 0.02, profile.spinBias + 0.16]
-  const levels = attack
-    ? [0.76 + profile.powerBias, 0.86 + profile.powerBias]
-    : [0.6 + profile.powerBias * 0.5, 0.72 + profile.powerBias * 0.6]
+  const hand = getHandSideForBall(player, ball)
+  const family = chooseRallyFamily(player, ball, hand)
+  const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
+  const xs = family === 'attack'
+    ? [-0.44, -0.24, 0.24, 0.44].map((f) => f * (TABLE.width / 2))
+    : family === 'block'
+      ? [-0.32, -0.14, 0.14, 0.32].map((f) => f * (TABLE.width / 2))
+      : family === 'cut'
+        ? [-0.28, 0, 0.28].map((f) => f * (TABLE.width / 2))
+        : [-0.38, -0.18, 0, 0.18, 0.38].map((f) => f * (TABLE.width / 2))
+  const ys = family === 'attack'
+    ? [0.34, 0.4, 0.45].map((f) => lane * TABLE.length * f)
+    : family === 'block'
+      ? [0.2, 0.24, 0.29].map((f) => lane * TABLE.length * f)
+      : family === 'cut'
+        ? [0.18, 0.22, 0.26].map((f) => lane * TABLE.length * f)
+        : [0.26, 0.32, 0.37].map((f) => lane * TABLE.length * f)
 
   for (const targetX of xs) {
     for (const targetY of ys) {
-      for (const spin of spins) {
-        for (const level of levels) {
-          const stroke = buildStrokePlan(player, ball, targetX, targetY, clamp(level - (1 - statusRatio) * 0.14, 0.4, 1), clamp(spin, -1.2, 1.2))
-          const path = sampleTrajectory(applyShot(ball, stroke.shot), 200)
-          const bounce = findTableBounce(path)
-          if (!bounce) continue
-          const sameSide = side > 0 ? bounce.y < 0 : bounce.y > 0
-          if (sameSide) continue
-          const score = evaluateAIReturn(player, stroke, attack, context, thirdBallAttack)
-          if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack, context, thirdBallAttack }
-        }
-      }
+      const stroke = applyRallyFamilyPlan(player, ball, hand, family, targetX, targetY)
+      const path = sampleTrajectory(applyShot(ball, stroke.shot), 200)
+      const bounce = findTableBounce(path)
+      if (!bounce) continue
+      const sameSide = side > 0 ? bounce.y < 0 : bounce.y > 0
+      if (sameSide) continue
+      let score = evaluateAIReturn(player, stroke, attack, context, thirdBallAttack)
+      if (family === 'attack') score += Math.abs(targetX) / (TABLE.width / 2) * 0.08 + Math.abs(targetY) / (TABLE.length / 2) * 0.06
+      if (family === 'drive') score += Math.abs(targetX) / (TABLE.width / 2) * 0.04 + 0.05
+      if (family === 'block') score += (1 - Math.abs(targetY) / (TABLE.length / 2)) * 0.08
+      if (family === 'cut') score += (1 - Math.abs(targetY) / (TABLE.length / 2)) * 0.1 + (player.archetype === 'ShakeCut' ? 0.08 : 0)
+      if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack: family === 'attack', context, thirdBallAttack, commitStyle }
     }
   }
 
   if (best) return best
-  const fallback = buildStrokePlan(player, ball, 0, lane * TABLE.length * 0.24, 0.66, profile.spinBias)
-  return { stroke: fallback, score: -1, targetX: 0, targetY: lane * TABLE.length * 0.24, attack: false, context, thirdBallAttack }
+  const fallback = applyRallyFamilyPlan(player, ball, hand, family, 0, lane * TABLE.length * 0.28)
+  return { stroke: fallback, score: -1, targetX: 0, targetY: lane * TABLE.length * 0.28, attack: family === 'attack', context, thirdBallAttack, commitStyle }
 }
