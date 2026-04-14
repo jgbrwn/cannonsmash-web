@@ -691,6 +691,18 @@ export function detectStrokeContext(player: PlayerState, ball: BallState): Strok
   return 'rally'
 }
 
+export function shouldResolveOpeningPhase(context: StrokeContext, family: ShotFamily, quality: number): boolean {
+  if (context === 'opener') {
+    if (family === 'attack') return quality > 0.42
+    if (family === 'drive' || family === 'block') return quality > 0.6
+    return false
+  }
+  if (context === 'receive') {
+    return family === 'attack' ? quality > 0.68 : family === 'drive' || family === 'block' ? quality > 0.74 : false
+  }
+  return context === 'rally'
+}
+
 function inferServePattern(player: PlayerState): ServePattern {
   if (player.archetype === 'ShakeCut') return 'short-spin'
   if (player.archetype === 'PenAttack') return 'wide-setup'

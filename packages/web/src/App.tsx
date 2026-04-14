@@ -18,6 +18,7 @@ import {
   getCadenceWindow,
   getDecisionLeadTicks,
   getHandSideForBall,
+  shouldResolveOpeningPhase,
   getPlayerContactMetrics,
   getPlayerStanceOffset,
   getStatusRatio,
@@ -369,23 +370,33 @@ export default function App() {
               fxRef.current.pulse = 1
               fxRef.current.pulseColor = impact.quality > 0.72 ? '#7ed7ff' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
+              const openingResolved = shouldResolveOpeningPhase(playerContext, nextPlayer.plannedFamily, impact.quality)
               if (playerContext === 'receive') {
-                setLiveServePattern(null)
-                setLiveReceivePressure(openingPreview.receivePressure ?? null)
+                if (openingResolved) {
+                  setLiveServePattern(null)
+                  setLiveReceivePressure(null)
+                } else {
+                  setLiveServePattern(null)
+                  setLiveReceivePressure(openingPreview.receivePressure ?? null)
+                }
               }
-              nextMessage = impact.quality > 0.72
-                ? 'Clean contact.'
-                : impact.quality < 0.38
-                  ? player.plannedContext === 'opener' && player.plannedFamily === 'attack'
-                    ? 'First attack was too low to lift cleanly.'
-                    : player.plannedReceivePressure === 'high'
-                      ? 'Pressured receive broke down.'
-                      : 'Fatigued contact.'
-                  : impact.timingError > 0.05
-                    ? 'Late contact.'
-                    : impact.timingError < -0.05
-                      ? 'Early contact.'
-                      : 'Reached and guided it back.'
+              nextMessage = openingResolved && playerContext !== 'rally'
+                ? playerContext === 'receive'
+                  ? 'Receive phase stabilizes into open rally.'
+                  : 'First attack lands — rally opens up.'
+                : impact.quality > 0.72
+                  ? 'Clean contact.'
+                  : impact.quality < 0.38
+                    ? player.plannedContext === 'opener' && player.plannedFamily === 'attack'
+                      ? 'First attack was too low to lift cleanly.'
+                      : player.plannedReceivePressure === 'high'
+                        ? 'Pressured receive broke down.'
+                        : 'Fatigued contact.'
+                    : impact.timingError > 0.05
+                      ? 'Late contact.'
+                      : impact.timingError < -0.05
+                        ? 'Early contact.'
+                        : 'Reached and guided it back.'
             }
           } else {
             nextMessage = playerStatusRatio < 0.3 ? 'Too drained — missed contact.' : 'Missed contact — get into position first.'
@@ -429,19 +440,29 @@ export default function App() {
               fxRef.current.pulse = 1
               fxRef.current.pulseColor = impact.quality > 0.72 ? '#ffd46d' : impact.quality < 0.38 ? '#ff8f70' : '#ffe08a'
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
+              const openingResolved = shouldResolveOpeningPhase(nextOpponent.plannedContext, nextOpponent.plannedFamily, impact.quality)
               if (nextOpponent.plannedContext === 'receive') {
-                setLiveServePattern(null)
-                setLiveReceivePressure(choicePressure(nextOpponent.plannedFamily, liveServePattern))
+                if (openingResolved) {
+                  setLiveServePattern(null)
+                  setLiveReceivePressure(null)
+                } else {
+                  setLiveServePattern(null)
+                  setLiveReceivePressure(choicePressure(nextOpponent.plannedFamily, liveServePattern))
+                }
               }
-              nextMessage = impact.quality > 0.72
-                ? 'Opponent times the return cleanly.'
-                : nextOpponent.plannedContext === 'opener' && nextOpponent.plannedFamily === 'attack'
-                  ? 'Opponent forces a low first attack and loses shape.'
-                  : nextOpponent.plannedReceivePressure === 'high'
-                    ? 'Opponent buckles under receive pressure.'
-                    : getStatusRatio(nextOpponent) < 0.3
-                      ? 'Opponent lunges a tired return.'
-                      : 'Opponent scrambles a return!'
+              nextMessage = openingResolved && nextOpponent.plannedContext !== 'rally'
+                ? nextOpponent.plannedContext === 'receive'
+                  ? 'Opponent settles the receive and the rally opens.'
+                  : 'Opponent lands the first attack and opens the rally.'
+                : impact.quality > 0.72
+                  ? 'Opponent times the return cleanly.'
+                  : nextOpponent.plannedContext === 'opener' && nextOpponent.plannedFamily === 'attack'
+                    ? 'Opponent forces a low first attack and loses shape.'
+                    : nextOpponent.plannedReceivePressure === 'high'
+                      ? 'Opponent buckles under receive pressure.'
+                      : getStatusRatio(nextOpponent) < 0.3
+                        ? 'Opponent lunges a tired return.'
+                        : 'Opponent scrambles a return!'
             }
           } else {
             aiPlanRef.current = null
@@ -817,6 +838,7 @@ export default function App() {
               <div>opening bias: {assistOpeningBias ? 'on' : 'off'}</div>
               <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
               <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
+              <div>opening active: {playerContext === 'receive' || playerContext === 'opener' ? 'yes' : 'no'}</div>
               <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
               <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
               <div>your swing: {player.swingState} @ {player.swingTimer} · {player.plannedHand} {player.plannedFamily}</div>
