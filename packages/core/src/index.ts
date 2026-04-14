@@ -767,6 +767,49 @@ export function getReceivePressure(pattern?: ServePattern): ReceivePressure {
   return 'low'
 }
 
+function chooseOpeningFamily(
+  player: PlayerState,
+  ball: BallState,
+  hand: HandSide,
+  context: StrokeContext,
+  incomingServePattern?: ServePattern,
+): ShotFamily {
+  const statusRatio = getStatusRatio(player)
+  const pressure = getReceivePressure(incomingServePattern)
+  const highBall = ball.z > TABLE.height + 0.33
+  const veryHighBall = ball.z > TABLE.height + 0.42
+
+  if (context === 'receive') {
+    if (incomingServePattern === 'short-spin') {
+      if (player.archetype === 'ShakeCut') return highBall && statusRatio > 0.56 ? 'block' : 'cut'
+      if (hand === 'backhand' || pressure === 'high') return 'block'
+      return highBall && statusRatio > 0.66 && player.archetype === 'PenAttack' ? 'drive' : 'block'
+    }
+    if (incomingServePattern === 'fast-long') {
+      if (player.archetype === 'PenAttack') return hand === 'forehand' && highBall && statusRatio > 0.5 ? 'attack' : 'drive'
+      if (player.archetype === 'ShakeCut') return highBall && statusRatio > 0.58 ? 'block' : 'cut'
+      return hand === 'backhand' ? 'block' : 'drive'
+    }
+    if (incomingServePattern === 'wide-setup') {
+      if (player.archetype === 'PenAttack') return hand === 'forehand' && highBall && statusRatio > 0.54 ? 'attack' : 'drive'
+      if (player.archetype === 'ShakeCut') return hand === 'backhand' || pressure === 'medium' ? 'cut' : 'block'
+      return hand === 'backhand' ? 'block' : 'drive'
+    }
+  }
+
+  if (context === 'opener') {
+    if (player.archetype === 'PenAttack') return hand === 'forehand' && (highBall || veryHighBall) && statusRatio > 0.4 ? 'attack' : 'drive'
+    if (player.archetype === 'PenDrive') return hand === 'backhand' && !highBall ? 'block' : 'drive'
+    return highBall && statusRatio > 0.52 ? 'block' : 'cut'
+  }
+
+  if (context === 'serve') {
+    return player.archetype === 'ShakeCut' ? 'cut' : 'drive'
+  }
+
+  return classifyShotFamily(player, ball, hand, statusRatio)
+}
+
 export function buildOpeningStrokePlan(
   player: PlayerState,
   ball: BallState,
@@ -779,7 +822,7 @@ export function buildOpeningStrokePlan(
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
   const lane = player.side > 0 ? -1 : 1
-  let family: ShotFamily
+  let family: ShotFamily = chooseOpeningFamily(player, ball, hand, context, incomingServePattern)
   let level = 0.66 + profile.powerBias * 0.35
   let spin = profile.spinBias
   let depthBias = context === 'serve' ? 0.18 : context === 'receive' ? 0.24 : 0.34
@@ -810,53 +853,44 @@ export function buildOpeningStrokePlan(
   } else if (context === 'receive') {
     receivePressure = getReceivePressure(incomingServePattern)
     if (incomingServePattern === 'fast-long') {
-      family = player.archetype === 'PenAttack' && hand === 'forehand' ? 'attack' : player.archetype === 'ShakeCut' ? 'block' : 'drive'
-      level += family === 'attack' ? 0.16 : 0.05
-      spin += family === 'attack' ? 0.02 : 0.1
-      depthBias = 0.36
+      level += family === 'attack' ? 0.16 : family === 'drive' ? 0.06 : -0.02
+      spin += family === 'attack' ? 0.02 : family === 'block' ? -0.02 : family === 'cut' ? -0.14 : 0.1
+      depthBias = family === 'attack' ? 0.39 : 0.36
     } else if (incomingServePattern === 'short-spin') {
-      family = player.archetype === 'ShakeCut' ? 'cut' : hand === 'backhand' ? 'block' : 'drive'
-      level -= 0.12
-      spin += family === 'cut' ? -0.32 : 0.01
-      depthBias = 0.17
+      level -= family === 'cut' ? 0.14 : family === 'block' ? 0.1 : 0.06
+      spin += family === 'cut' ? -0.32 : family === 'block' ? -0.08 : 0.01
+      depthBias = family === 'cut' ? 0.14 : 0.17
       targetX = clamp(targetX * 0.55, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
     } else if (incomingServePattern === 'wide-setup') {
-      family = player.archetype === 'PenDrive' ? 'drive' : player.archetype === 'ShakeCut' ? 'cut' : hand === 'forehand' ? 'attack' : 'drive'
-      level += family === 'attack' ? 0.08 : -0.01
-      spin += family === 'cut' ? -0.18 : 0.06
+      level += family === 'attack' ? 0.08 : family === 'drive' ? 0.01 : -0.04
+      spin += family === 'cut' ? -0.18 : family === 'block' ? -0.04 : 0.06
       targetX = clamp(-targetX * 0.9, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
-      depthBias = 0.24
+      depthBias = family === 'attack' ? 0.28 : 0.24
     } else if (player.archetype === 'ShakeCut') {
-      family = hand === 'forehand' && ball.z > TABLE.height + 0.28 && statusRatio > 0.58 ? 'block' : 'cut'
-      level -= 0.08
-      spin -= 0.22
+      level -= family === 'block' ? 0.02 : 0.08
+      spin -= family === 'block' ? 0.08 : 0.22
       depthBias = 0.22
     } else if (player.archetype === 'PenAttack') {
-      family = hand === 'forehand' && ball.z > TABLE.height + 0.32 && statusRatio > 0.52 ? 'attack' : 'drive'
       level += family === 'attack' ? 0.1 : 0.02
       spin += family === 'attack' ? 0.04 : 0.1
     } else {
-      family = hand === 'backhand' ? 'block' : 'drive'
-      level += 0.03
-      spin += 0.12
+      level += family === 'block' ? -0.01 : 0.03
+      spin += family === 'block' ? -0.02 : 0.12
       targetX = clamp(targetX * 0.78, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
     }
   } else {
     if (player.archetype === 'PenAttack') {
-      family = hand === 'forehand' && statusRatio > 0.42 ? 'attack' : 'drive'
       level += family === 'attack' ? 0.14 : 0.04
-      spin += 0.08
-      depthBias = 0.38
+      spin += family === 'attack' ? 0.08 : 0.04
+      depthBias = family === 'attack' ? 0.38 : 0.34
     } else if (player.archetype === 'PenDrive') {
-      family = 'drive'
-      level += 0.08
-      spin += 0.16
+      level += family === 'block' ? 0.01 : 0.08
+      spin += family === 'block' ? 0.04 : 0.16
       depthBias = 0.34
     } else {
-      family = hand === 'forehand' && ball.z > TABLE.height + 0.3 && statusRatio > 0.48 ? 'block' : 'cut'
-      level -= 0.04
-      spin -= 0.26
-      depthBias = 0.28
+      level -= family === 'block' ? 0.01 : 0.04
+      spin -= family === 'block' ? 0.12 : 0.26
+      depthBias = family === 'block' ? 0.3 : 0.28
     }
   }
 
