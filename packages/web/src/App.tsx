@@ -6,6 +6,7 @@ import {
   ARCHETYPES,
   applyShot,
   buildOpeningStrokePlan,
+  buildRallyStrokePlan,
   buildStrokePlan,
   chooseAIReturnShot,
   analyzeServe,
@@ -150,6 +151,12 @@ export default function App() {
       : ball
     return buildOpeningStrokePlan(player, baseBall, target.x, target.y, playerContext, liveServePattern ?? undefined)
   }, [ball, isYourServe, liveServePattern, player, playerContext, target.x, target.y])
+  const rallyPreview = useMemo(() => {
+    const baseBall = ball.status === 8
+      ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
+      : ball
+    return buildRallyStrokePlan(player, baseBall, target.x, target.y, liveRallyPattern)
+  }, [ball, isYourServe, liveRallyPattern, player, target.x, target.y])
   const defaultPreview = useMemo(() => {
     const baseBall = ball.status === 8
       ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
@@ -743,8 +750,10 @@ export default function App() {
       : ball.status === 8 ? createNeutralBallForSide(player.side) : { ...ball }
 
     const plannedContext = detectStrokeContext(playerRef.current, baseBall)
-    const stroke = assistOpeningBias && plannedContext !== 'rally'
-      ? buildOpeningStrokePlan(playerRef.current, baseBall, target.x, target.y, plannedContext, liveServePattern ?? undefined)
+    const stroke = assistOpeningBias
+      ? plannedContext !== 'rally'
+        ? buildOpeningStrokePlan(playerRef.current, baseBall, target.x, target.y, plannedContext, liveServePattern ?? undefined)
+        : buildRallyStrokePlan(playerRef.current, baseBall, target.x, target.y, liveRallyPattern)
       : effectiveServeMode
         ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
         : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
@@ -885,7 +894,7 @@ export default function App() {
               <div>opening bias: {assistOpeningBias ? 'on' : 'off'}</div>
               <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
               <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
-              <div>rally pattern: {liveRallyPattern ?? 'none'}</div>
+              <div>rally pattern: {playerContext === 'rally' ? rallyPreview.rallyPattern : liveRallyPattern ?? 'none'}</div>
               <div>opening active: {playerContext === 'receive' || playerContext === 'opener' ? 'yes' : 'no'}</div>
               <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
               <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
@@ -957,10 +966,10 @@ export default function App() {
         <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
           phase: {playerContext}<br />
           serve: {liveServePattern ?? openingPreview.servePattern ?? '—'}<br />
-          suggested: {openingPreview.hand} {openingPreview.family}
+          suggested: {playerContext === 'rally' ? `${rallyPreview.hand} ${rallyPreview.family}` : `${openingPreview.hand} ${openingPreview.family}`}
           {playerContext !== 'rally' ? <><br />opening read: {openingPreview.family} via {openingPreview.hand}</> : null}
           {playerContext === 'opener' ? <><br />opener shape: {openingPreview.family === 'attack' ? 'flatter / faster' : openingPreview.family === 'cut' ? 'spinnier / safer' : openingPreview.family === 'block' ? 'compact / higher margin' : 'steady topspin'}</> : null}
-          {playerContext === 'rally' ? <><br />rally read: {liveRallyPattern === 'pressure' ? 'under pressure / look to counter or block' : liveRallyPattern === 'reset' ? 'reset ball / chance to reopen' : openingPreview.family === 'attack' ? 'pressure / counter hit' : openingPreview.family === 'drive' ? 'topspin exchange' : openingPreview.family === 'block' ? 'compact counter / block' : 'reset / chop pressure'}</> : null}
+          {playerContext === 'rally' ? <><br />rally read: {rallyPreview.rallyPattern === 'pressure' ? 'apply pressure / look to finish from shape' : rallyPreview.rallyPattern === 'reset' ? 'reset or roll safe to reopen later' : 'counter off the incoming pace'}<br />rally commit: {rallyPreview.commitStyle}<br />rally family: {rallyPreview.family}</> : null}
           {serveWindowHint ? <><br />hint: {serveWindowHint}</> : null}
           {(ball.status === 8 && isYourServe) ? <><br />serve faults now check net / long / wide / wrong-bounce.</> : null}
         </div>
@@ -969,6 +978,7 @@ export default function App() {
             <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
               receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? '—'}<br />
               manual: {defaultPreview.hand} {defaultPreview.family}
+              {playerContext === 'rally' ? <><br />assist rally: {rallyPreview.rallyPattern} · {rallyPreview.family} · {rallyPreview.commitStyle}</> : null}
             </div>
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}

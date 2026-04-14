@@ -1219,7 +1219,7 @@ function isAttackableBall(ball: BallState, side: PlayerSide): boolean {
   return ball.z > TABLE.height + 0.34 && ((side === 1 && ball.y < -0.2) || (side === -1 && ball.y > 0.2))
 }
 
-function chooseRallyFamily(player: PlayerState, ball: BallState, hand: HandSide): ShotFamily {
+export function chooseRallyFamily(player: PlayerState, ball: BallState, hand: HandSide): ShotFamily {
   const statusRatio = getStatusRatio(player)
   const highBall = ball.z > TABLE.height + 0.36
   const lowBall = ball.z < TABLE.height + 0.2
@@ -1242,7 +1242,7 @@ function chooseRallyFamily(player: PlayerState, ball: BallState, hand: HandSide)
   return lowBall ? 'cut' : 'block'
 }
 
-function getRallyCommitStyle(
+export function getRallyCommitStyle(
   archetype: PlayerArchetype,
   family: ShotFamily,
   hand: HandSide,
@@ -1271,7 +1271,7 @@ export function inferRallyPatternFromShot(shot: ShotSolution | null): RallyPatte
   return 'counter'
 }
 
-function chooseRallyPattern(
+export function chooseRallyPattern(
   player: PlayerState,
   family: ShotFamily,
   ball: BallState,
@@ -1300,6 +1300,51 @@ function chooseRallyPattern(
   if (player.archetype === 'PenAttack' && statusRatio > 0.52) return 'pressure'
   if (player.archetype === 'ShakeCut') return 'reset'
   return closeToTable ? 'counter' : 'pressure'
+}
+
+export function buildRallyStrokePlan(
+  player: PlayerState,
+  ball: BallState,
+  targetX: number,
+  targetY: number,
+  incomingPattern: RallyPattern | null = null,
+): PlannedStroke & { rallyPattern: RallyPattern; commitStyle: 'early-take' | 'balanced' | 'late-read' } {
+  const hand = getHandSideForBall(player, ball)
+  const family = chooseRallyFamily(player, ball, hand)
+  const rallyPattern = chooseRallyPattern(player, family, ball, incomingPattern)
+  const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
+  const profile = getArchetypeProfile(player)
+  const lane = player.side > 0 ? -1 : 1
+  const highBall = ball.z > TABLE.height + 0.36
+  let nextTargetX = targetX
+  let nextTargetY = targetY
+  let level = 0.68 + profile.powerBias * 0.45
+  let spin = profile.spinBias
+
+  if (family === 'attack') {
+    level += rallyPattern === 'pressure' ? 0.2 : 0.14
+    spin += rallyPattern === 'pressure' ? 0.12 : 0.06
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'pressure' ? (highBall ? 0.43 : 0.39) : 0.35)
+    nextTargetX = clamp(targetX * (rallyPattern === 'pressure' ? 1.18 : 1.04) + player.side * 0.06, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  } else if (family === 'drive') {
+    level += rallyPattern === 'pressure' ? 0.1 : rallyPattern === 'reset' ? 0.02 : 0.06
+    spin += rallyPattern === 'reset' ? 0.1 : player.archetype === 'ShakeCut' ? 0.02 : 0.16
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'reset' ? 0.29 : rallyPattern === 'pressure' ? 0.37 : 0.33)
+    nextTargetX = clamp(targetX * (rallyPattern === 'counter' ? 0.96 : 0.82), -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  } else if (family === 'block') {
+    level += rallyPattern === 'counter' ? 0 : -0.05
+    spin += rallyPattern === 'reset' ? -0.08 : player.archetype === 'ShakeCut' ? -0.08 : -0.02
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'reset' ? 0.22 : 0.27)
+    nextTargetX = clamp(-targetX * (rallyPattern === 'counter' ? 0.82 : 0.62) + (hand === 'backhand' ? -player.side * 0.04 : player.side * 0.04), -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  } else {
+    level -= rallyPattern === 'reset' ? 0.14 : 0.09
+    spin -= rallyPattern === 'counter' ? 0.2 : 0.3
+    nextTargetY = lane * TABLE.length * (rallyPattern === 'counter' ? 0.25 : 0.21)
+    nextTargetX = clamp(-targetX * (rallyPattern === 'counter' ? 0.66 : 0.5) - player.side * 0.05, -TABLE.width / 2 + 0.08, TABLE.width / 2 - 0.08)
+  }
+
+  const shot = solveTargetToV(ball, nextTargetX, nextTargetY, clamp(level, 0.38, 1), clamp(spin, -1.2, 1.2))
+  return { shot, family, hand, rallyPattern, commitStyle }
 }
 
 function applyRallyFamilyPlan(
