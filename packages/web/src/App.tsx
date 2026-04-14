@@ -376,9 +376,11 @@ export default function App() {
               nextMessage = impact.quality > 0.72
                 ? 'Clean contact.'
                 : impact.quality < 0.38
-                  ? player.plannedReceivePressure === 'high'
-                    ? 'Pressured receive broke down.'
-                    : 'Fatigued contact.'
+                  ? player.plannedContext === 'opener' && player.plannedFamily === 'attack'
+                    ? 'First attack was too low to lift cleanly.'
+                    : player.plannedReceivePressure === 'high'
+                      ? 'Pressured receive broke down.'
+                      : 'Fatigued contact.'
                   : impact.timingError > 0.05
                     ? 'Late contact.'
                     : impact.timingError < -0.05
@@ -433,11 +435,13 @@ export default function App() {
               }
               nextMessage = impact.quality > 0.72
                 ? 'Opponent times the return cleanly.'
-                : nextOpponent.plannedReceivePressure === 'high'
-                  ? 'Opponent buckles under receive pressure.'
-                  : getStatusRatio(nextOpponent) < 0.3
-                    ? 'Opponent lunges a tired return.'
-                    : 'Opponent scrambles a return!'
+                : nextOpponent.plannedContext === 'opener' && nextOpponent.plannedFamily === 'attack'
+                  ? 'Opponent forces a low first attack and loses shape.'
+                  : nextOpponent.plannedReceivePressure === 'high'
+                    ? 'Opponent buckles under receive pressure.'
+                    : getStatusRatio(nextOpponent) < 0.3
+                      ? 'Opponent lunges a tired return.'
+                      : 'Opponent scrambles a return!'
             }
           } else {
             aiPlanRef.current = null

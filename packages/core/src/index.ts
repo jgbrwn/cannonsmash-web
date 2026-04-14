@@ -973,25 +973,39 @@ function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSol
   const distancePenalty = clamp(metrics.distance / profile.contactRadius, 0, 1)
   const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
   const fatiguePenalty = 1 - statusRatio
-  const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7 - fatiguePenalty * 0.45
-  if (!metrics.reachable || quality < 0.16) return null
+  const lowBall = ball.z < TABLE.height + 0.22
+  const openerAttackWindow = player.plannedContext === 'opener' && player.plannedFamily === 'attack'
+  const pressuredReceive = player.plannedContext === 'receive' && player.plannedReceivePressure === 'high'
+  const attackHeightPenalty = player.plannedFamily === 'attack'
+    ? lowBall ? 0.34 : ball.z < TABLE.height + 0.3 ? 0.16 : 0
+    : 0
+  const netClearPenalty = player.plannedFamily === 'attack' || openerAttackWindow
+    ? lowBall ? 0.18 : 0.05
+    : player.plannedFamily === 'drive' && ball.z < TABLE.height + 0.2
+      ? 0.08
+      : 0
+  const bounceShapePenalty = openerAttackWindow
+    ? timingPenalty * 0.12 + (fatiguePenalty * 0.08) + attackHeightPenalty * 0.5
+    : 0
+  const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7 - fatiguePenalty * 0.45 - attackHeightPenalty - netClearPenalty - bounceShapePenalty
+  if (!metrics.reachable || quality < (openerAttackWindow ? 0.24 : pressuredReceive ? 0.2 : 0.16)) return null
 
   const familyPower = player.plannedFamily === 'attack' ? 0.12 : player.plannedFamily === 'drive' ? 0.04 : player.plannedFamily === 'cut' ? -0.12 : -0.05
   const familySpin = player.plannedFamily === 'attack' ? 0.08 : player.plannedFamily === 'drive' ? 0.1 : player.plannedFamily === 'cut' ? -0.22 : -0.04
   const handError = player.plannedHand === 'backhand' ? 0.05 : -0.01
-  const errorScale = fatiguePenalty * 0.32
+  const errorScale = fatiguePenalty * 0.32 + (openerAttackWindow ? 0.08 : 0)
   const adjustedTargetX = clamp(
     shot.targetX + metrics.dx * (0.75 + errorScale) + metrics.timingError * (0.16 + handError) + profile.powerBias * 0.08,
     -TABLE.width / 2 + 0.04,
     TABLE.width / 2 - 0.04,
   )
   const adjustedTargetY = clamp(
-    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1) + profile.powerBias * 0.16 + familyPower * 0.12,
+    shot.targetY + metrics.timingError * 0.45 - Math.abs(metrics.dx) * 0.12 * Math.sign(shot.targetY || 1) + profile.powerBias * 0.16 + familyPower * 0.12 - attackHeightPenalty * 0.16,
     shot.targetY >= 0 ? 0.08 : -TABLE.length / 2 + 0.08,
     shot.targetY >= 0 ? TABLE.length / 2 - 0.08 : -0.08,
   )
-  const adjustedLevel = clamp(shot.level + profile.powerBias + familyPower - timingPenalty * 0.18 - distancePenalty * 0.1 - fatiguePenalty * 0.18, 0.32, 1)
-  const adjustedSpin = clamp(shot.spin + profile.spinBias + familySpin - metrics.timingError * 0.9 - metrics.dx * 0.8 - fatiguePenalty * 0.15, -1.2, 1.2)
+  const adjustedLevel = clamp(shot.level + profile.powerBias + familyPower - timingPenalty * 0.18 - distancePenalty * 0.1 - fatiguePenalty * 0.18 - attackHeightPenalty * 0.22 - netClearPenalty * 0.12, 0.32, 1)
+  const adjustedSpin = clamp(shot.spin + profile.spinBias + familySpin - metrics.timingError * 0.9 - metrics.dx * 0.8 - fatiguePenalty * 0.15 - bounceShapePenalty * 0.2, -1.2, 1.2)
 
   return shot.isServe
     ? solveTargetToVS(ball, adjustedTargetX, adjustedTargetY, adjustedLevel, adjustedSpin)
@@ -1011,7 +1025,8 @@ export function resolveImpact(player: PlayerState, ball: BallState): ImpactResul
   const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
   const quality = clamp(1 - distancePenalty * 0.5 - timingPenalty * 0.7 - (1 - statusRatio) * 0.45, 0, 1)
   const pressurePenalty = player.plannedReceivePressure === 'high' ? 0.08 : player.plannedReceivePressure === 'medium' ? 0.04 : 0
-  const spent = clamp(profile.recoveryCost + distancePenalty * 0.012 + timingPenalty * 0.02 + pressurePenalty * 0.4, 0, player.statusMax)
+  const firstAttackPenalty = player.plannedContext === 'opener' && player.plannedFamily === 'attack' && ball.z < TABLE.height + 0.3 ? 0.035 : 0
+  const spent = clamp(profile.recoveryCost + distancePenalty * 0.012 + timingPenalty * 0.02 + pressurePenalty * 0.4 + firstAttackPenalty, 0, player.statusMax)
 
   return {
     player: {
