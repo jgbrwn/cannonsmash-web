@@ -13,7 +13,9 @@ import {
   createNeutralBallForSide,
   createPlayer,
   detectStrokeContext,
+  findContactPointForPhase,
   findTableBounce,
+  getCadenceWindow,
   getDecisionLeadTicks,
   getHandSideForBall,
   getPlayerContactMetrics,
@@ -278,9 +280,14 @@ export default function App() {
         if (isBallHittableForSide(nextBall, opponent.side) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
             const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined)
+            const cadence = getCadenceWindow(choice.context, nextOpponent.archetype, choice.stroke.family, choice.stroke.servePattern)
+            const contactPlan = findContactPointForPhase(nextBall, nextOpponent.side, cadence.contactPhase, 180, choice.stroke.hand)
             const lateDecision = getDecisionLeadTicks(choice.context, nextOpponent.archetype, choice.stroke.servePattern)
             const impactTick = getSwingImpactTick(choice.context, choice.stroke.family)
-            const planTicks = Math.max(1, (oppPlan?.etaTicks ?? impactTick) - lateDecision)
+            const planTicks = Math.max(1, (contactPlan?.etaTicks ?? oppPlan?.etaTicks ?? impactTick) - lateDecision)
+            if (contactPlan) {
+              nextOpponent = setPlayerTarget(nextOpponent, contactPlan.playerX, contactPlan.playerY, choice.stroke.hand)
+            }
             aiPlanRef.current = {
               swingAt: planTicks,
               shot: choice.stroke.shot,
@@ -294,7 +301,7 @@ export default function App() {
             nextMessage = choice.context === 'receive'
               ? `Opponent shapes a ${choice.stroke.family} receive${liveServePattern ? ` vs ${liveServePattern}` : ''}...`
               : choice.context === 'opener'
-                ? `Opponent looks for a ${choice.stroke.family} opener...`
+                ? `Opponent looks for a ${choice.stroke.family} opener on the ${cadence.contactPhase.replace('-', ' ')}...`
                 : choice.attack
                   ? `Opponent lines up a ${choice.stroke.hand} ${choice.stroke.family}...`
                   : `Opponent reads a ${choice.stroke.hand} ${choice.stroke.family}...`
@@ -308,8 +315,8 @@ export default function App() {
                 ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
                 : aiPlanRef.current.context === 'opener'
                   ? aiPlanRef.current.thirdBallAttack
-                    ? 'Opponent jumps on the planned third-ball attack!'
-                    : 'Opponent jumps on the first attack!'
+                    ? 'Opponent jumps on the planned third-ball attack early!'
+                    : 'Opponent jumps on the first attack phase!'
                   : aiPlanRef.current.attack
                     ? `Opponent commits late to a ${aiPlanRef.current.hand} attack!`
                     : `Opponent commits late to a ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
@@ -888,7 +895,7 @@ export default function App() {
             </div>
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
-            {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s</div>}
+            {aiPlanRef.current && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp swing commit in {(Math.max(0, aiPlanRef.current.swingAt) * TICK).toFixed(2)}s · {aiPlanRef.current.context}</div>}
             {lastShot && <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.9 }}>last shot: ({lastShot.vx.toFixed(2)}, {lastShot.vy.toFixed(2)}, {lastShot.vz.toFixed(2)})</div>}
           </>
         )}

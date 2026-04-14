@@ -390,6 +390,12 @@ export interface ServeAnalysis {
   secondBounce?: BallState
 }
 
+export interface CadenceWindow {
+  decisionLeadTicks: number
+  impactTick: number
+  contactPhase: 'early-rise' | 'peak' | 'late-fall'
+}
+
 export interface ImpactResult {
   player: PlayerState
   shot: ShotSolution | null
@@ -714,17 +720,45 @@ function clampPlannedLanding(targetX: number, targetY: number, context: StrokeCo
 }
 
 export function getDecisionLeadTicks(context: StrokeContext, archetype: PlayerArchetype, pattern?: ServePattern): number {
-  if (context === 'serve') return pattern === 'fast-long' ? 8 : pattern === 'short-spin' ? 10 : 9
-  if (context === 'receive') return archetype === 'ShakeCut' ? 13 : 11
-  if (context === 'opener') return archetype === 'PenAttack' ? 15 : 17
-  return archetype === 'PenAttack' ? 19 : archetype === 'ShakeCut' ? 20 : 18
+  return getCadenceWindow(context, archetype, 'drive', pattern).decisionLeadTicks
 }
 
 export function getSwingImpactTick(context: StrokeContext, family: ShotFamily = 'drive'): number {
-  if (context === 'serve') return family === 'cut' ? 17 : 16
-  if (context === 'receive') return family === 'attack' ? 19 : 18
-  if (context === 'opener') return family === 'attack' ? 21 : 20
-  return family === 'attack' ? 20 : 19
+  return getCadenceWindow(context, 'PenDrive', family).impactTick
+}
+
+export function getCadenceWindow(
+  context: StrokeContext,
+  archetype: PlayerArchetype,
+  family: ShotFamily = 'drive',
+  pattern?: ServePattern,
+): CadenceWindow {
+  if (context === 'serve') {
+    return {
+      decisionLeadTicks: pattern === 'fast-long' ? 8 : pattern === 'short-spin' ? 10 : 9,
+      impactTick: family === 'cut' ? 17 : 16,
+      contactPhase: pattern === 'short-spin' ? 'late-fall' : 'peak',
+    }
+  }
+  if (context === 'receive') {
+    return {
+      decisionLeadTicks: archetype === 'ShakeCut' ? 13 : 11,
+      impactTick: family === 'attack' ? 19 : 18,
+      contactPhase: family === 'attack' ? 'peak' : 'early-rise',
+    }
+  }
+  if (context === 'opener') {
+    return {
+      decisionLeadTicks: archetype === 'PenAttack' ? 15 : 17,
+      impactTick: family === 'attack' ? 21 : 20,
+      contactPhase: family === 'attack' ? 'early-rise' : 'peak',
+    }
+  }
+  return {
+    decisionLeadTicks: archetype === 'PenAttack' ? 19 : archetype === 'ShakeCut' ? 20 : 18,
+    impactTick: family === 'attack' ? 20 : 19,
+    contactPhase: family === 'attack' ? 'early-rise' : 'late-fall',
+  }
 }
 
 export function getReceivePressure(pattern?: ServePattern): ReceivePressure {
@@ -1002,6 +1036,43 @@ export function pickAIMoveTarget(player: PlayerState, ball: BallState): ContactP
     playerX: clamp(prediction.playerX * anticipation, -TABLE.width / 2 - 0.5, TABLE.width / 2 + 0.5),
     playerY: prediction.playerY,
   }
+}
+
+export function findContactPointForPhase(
+  ball: BallState,
+  side: PlayerSide,
+  phase: CadenceWindow['contactPhase'],
+  maxSteps = 180,
+  hand: HandSide = 'forehand',
+): ContactPointPrediction | null {
+  const matches: ContactPointPrediction[] = []
+  let cur = cloneBall(ball)
+  const dummyPlayer = createPlayer(side)
+  dummyPlayer.plannedHand = hand
+
+  for (let i = 0; i < maxSteps; i++) {
+    if (
+      ((side === 1 && cur.y <= 0) || (side === -1 && cur.y >= 0)) &&
+      cur.z >= TABLE.height + 0.12 &&
+      cur.z <= 1.52 &&
+      cur.status >= 0
+    ) {
+      const stance = getPlayerStanceOffset(dummyPlayer, hand)
+      matches.push({
+        ball: cur,
+        etaTicks: i,
+        playerX: clamp(cur.x - side * CONTACT_LATERAL - stance.x, -TABLE.width / 2 - 0.45, TABLE.width / 2 + 0.45),
+        playerY: clamp(cur.y - side * CONTACT_FORWARD - stance.y, side > 0 ? -TABLE.length / 2 - 0.72 : 0.08, side > 0 ? -0.08 : TABLE.length / 2 + 0.72),
+      })
+    }
+    cur = stepBall(cur)
+    if (cur.status < 0) break
+  }
+
+  if (!matches.length) return null
+  if (phase === 'early-rise') return matches[0]
+  if (phase === 'late-fall') return matches[Math.max(0, matches.length - 1)]
+  return matches[Math.floor(matches.length / 2)]
 }
 
 export function createNeutralBallForSide(side: PlayerSide): BallState {
