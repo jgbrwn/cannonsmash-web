@@ -375,7 +375,7 @@ export default function App() {
 
         nextPlayer = stepPlayer(nextPlayer)
         if (nextPlayer.swingState === 'impact') {
-          const impact = resolveImpact(nextPlayer, nextBall)
+          const impact = resolveImpact(nextPlayer, nextBall, rallySequence)
           nextPlayer = impact.player
           clearQueuedShot = true
           if (impact.madeContact && impact.shot) {
@@ -458,7 +458,7 @@ export default function App() {
 
         nextOpponent = stepPlayer(nextOpponent)
         if (nextOpponent.swingState === 'impact') {
-          const impact = resolveImpact(nextOpponent, nextBall)
+          const impact = resolveImpact(nextOpponent, nextBall, rallySequence)
           nextOpponent = impact.player
           if (impact.madeContact && impact.shot) {
             if (nextOpponent.plannedContext === 'serve') {
@@ -905,6 +905,7 @@ export default function App() {
               <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
               <div>rally pattern: {playerContext === 'rally' ? rallyPreview.rallyPattern : liveRallyPattern ?? 'none'}</div>
               <div>rally seq: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}</div>
+              <div>tempo read: {rallySequence.dominant === 'pressure' && rallySequence.streak >= 2 ? 'heavy exchange' : rallySequence.dominant === 'counter' && rallySequence.streak >= 2 ? 'stable trade' : rallySequence.dominant === 'reset' && rallySequence.streak >= 2 ? 'recovery ball' : 'mixed'}</div>
               <div>opening active: {playerContext === 'receive' || playerContext === 'opener' ? 'yes' : 'no'}</div>
               <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
               <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
@@ -988,7 +989,7 @@ export default function App() {
             <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
               receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? '—'}<br />
               manual: {defaultPreview.hand} {defaultPreview.family}
-              {playerContext === 'rally' ? <><br />assist rally: {rallyPreview.rallyPattern} · {rallyPreview.family} · {rallyPreview.commitStyle}<br />sequence: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}</> : null}
+              {playerContext === 'rally' ? <><br />assist rally: {rallyPreview.rallyPattern} · {rallyPreview.family} · {rallyPreview.commitStyle}<br />sequence: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}<br />tempo: {rallySequence.dominant === 'pressure' && rallySequence.streak >= 2 ? 'heavy exchange' : rallySequence.dominant === 'counter' && rallySequence.streak >= 2 ? 'stable trade' : rallySequence.dominant === 'reset' && rallySequence.streak >= 2 ? 'recovery ball' : 'mixed'}</> : null}
             </div>
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}

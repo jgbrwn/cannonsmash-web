@@ -1010,7 +1010,13 @@ export function analyzeServe(ball: BallState, shot: ShotSolution): ServeAnalysis
   return { isLegal: true, reason: 'long', firstBounce, secondBounce }
 }
 
-function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSolution, metrics: ContactMetrics): ShotSolution | null {
+function shapeShotForContact(
+  player: PlayerState,
+  ball: BallState,
+  shot: ShotSolution,
+  metrics: ContactMetrics,
+  sequence: RallySequenceState = { latest: null, dominant: null, streak: 0 },
+): ShotSolution | null {
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
   const distancePenalty = clamp(metrics.distance / profile.contactRadius, 0, 1)
@@ -1019,6 +1025,9 @@ function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSol
   const lowBall = ball.z < TABLE.height + 0.22
   const openerAttackWindow = player.plannedContext === 'opener' && player.plannedFamily === 'attack'
   const pressuredReceive = player.plannedContext === 'receive' && player.plannedReceivePressure === 'high'
+  const repeatedPressure = player.plannedContext === 'rally' && sequence.dominant === 'pressure' && sequence.streak >= 2
+  const repeatedCounter = player.plannedContext === 'rally' && sequence.dominant === 'counter' && sequence.streak >= 2
+  const repeatedReset = player.plannedContext === 'rally' && sequence.dominant === 'reset' && sequence.streak >= 2
   const attackHeightPenalty = player.plannedFamily === 'attack'
     ? lowBall ? 0.34 : ball.z < TABLE.height + 0.3 ? 0.16 : 0
     : 0
@@ -1029,29 +1038,33 @@ function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSol
       : 0
   const bounceShapePenalty = openerAttackWindow
     ? timingPenalty * 0.12 + (fatiguePenalty * 0.08) + attackHeightPenalty * 0.5
-    : 0
+    : repeatedPressure
+      ? timingPenalty * 0.08 + fatiguePenalty * 0.06
+      : 0
   const paceShape = player.plannedFamily === 'attack'
-    ? openerAttackWindow ? 0.16 : 0.12
+    ? openerAttackWindow ? 0.16 : repeatedPressure ? 0.08 : 0.12
     : player.plannedFamily === 'drive'
-      ? player.plannedContext === 'receive' ? 0.03 : 0.05
+      ? player.plannedContext === 'receive' ? 0.03 : repeatedCounter ? 0.03 : repeatedReset ? -0.01 : 0.05
       : player.plannedFamily === 'cut'
-        ? -0.15
-        : -0.09
+        ? repeatedReset ? -0.18 : -0.15
+        : repeatedCounter ? -0.06 : repeatedReset ? -0.12 : -0.09
   const spinShape = player.plannedFamily === 'attack'
-    ? openerAttackWindow ? 0.02 : 0.06
+    ? openerAttackWindow ? 0.02 : repeatedPressure ? 0.03 : 0.06
     : player.plannedFamily === 'drive'
-      ? 0.12
+      ? repeatedCounter ? 0.1 : repeatedReset ? 0.14 : 0.12
       : player.plannedFamily === 'cut'
-        ? -0.28
-        : -0.08
+        ? repeatedReset ? -0.32 : -0.28
+        : repeatedCounter ? -0.04 : -0.08
   const netMarginShape = player.plannedFamily === 'attack'
-    ? lowBall ? -0.12 : 0.03
+    ? lowBall ? -0.12 : repeatedPressure ? 0 : 0.03
     : player.plannedFamily === 'drive'
-      ? 0.02
+      ? repeatedCounter ? 0.03 : repeatedReset ? 0.05 : 0.02
       : player.plannedFamily === 'cut'
-        ? 0.06
-        : 0.08
-  const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7 - fatiguePenalty * 0.45 - attackHeightPenalty - netClearPenalty - bounceShapePenalty
+        ? repeatedReset ? 0.08 : 0.06
+        : repeatedCounter ? 0.06 : 0.08
+  const sequencePenalty = repeatedPressure ? 0.08 : 0
+  const sequenceBonus = repeatedCounter ? 0.05 : repeatedReset ? 0.04 : 0
+  const quality = 1 - distancePenalty * 0.5 - timingPenalty * 0.7 - fatiguePenalty * 0.45 - attackHeightPenalty - netClearPenalty - bounceShapePenalty - sequencePenalty + sequenceBonus
   if (!metrics.reachable || quality < (openerAttackWindow ? 0.24 : pressuredReceive ? 0.2 : 0.16)) return null
 
   const familyPower = player.plannedFamily === 'attack' ? 0.12 : player.plannedFamily === 'drive' ? 0.04 : player.plannedFamily === 'cut' ? -0.12 : -0.05
@@ -1085,7 +1098,11 @@ function shapeShotForContact(player: PlayerState, ball: BallState, shot: ShotSol
   }
 }
 
-export function resolveImpact(player: PlayerState, ball: BallState): ImpactResult {
+export function resolveImpact(
+  player: PlayerState,
+  ball: BallState,
+  sequence: RallySequenceState = { latest: null, dominant: null, streak: 0 },
+): ImpactResult {
   if (player.swingState !== 'impact' || !player.requestedShot) {
     return { player, shot: null, madeContact: false, quality: 0, timingError: 0, distance: Infinity }
   }
@@ -1093,20 +1110,24 @@ export function resolveImpact(player: PlayerState, ball: BallState): ImpactResul
   const metrics = getPlayerContactMetrics(player, ball)
   const profile = getArchetypeProfile(player)
   const statusRatio = getStatusRatio(player)
-  const shot = shapeShotForContact(player, ball, player.requestedShot, metrics)
+  const repeatedPressure = player.plannedContext === 'rally' && sequence.dominant === 'pressure' && sequence.streak >= 2
+  const repeatedCounter = player.plannedContext === 'rally' && sequence.dominant === 'counter' && sequence.streak >= 2
+  const repeatedReset = player.plannedContext === 'rally' && sequence.dominant === 'reset' && sequence.streak >= 2
+  const shot = shapeShotForContact(player, ball, player.requestedShot, metrics, sequence)
   const distancePenalty = clamp(metrics.distance / profile.contactRadius, 0, 1)
   const timingPenalty = clamp(Math.abs(metrics.timingError) / 0.28, 0, 1)
   const quality = clamp(1 - distancePenalty * 0.5 - timingPenalty * 0.7 - (1 - statusRatio) * 0.45, 0, 1)
   const pressurePenalty = player.plannedReceivePressure === 'high' ? 0.08 : player.plannedReceivePressure === 'medium' ? 0.04 : 0
   const firstAttackPenalty = player.plannedContext === 'opener' && player.plannedFamily === 'attack' && ball.z < TABLE.height + 0.3 ? 0.035 : 0
-  const spent = clamp(profile.recoveryCost + distancePenalty * 0.012 + timingPenalty * 0.02 + pressurePenalty * 0.4 + firstAttackPenalty, 0, player.statusMax)
+  const sequenceSpend = repeatedPressure ? 0.02 : repeatedCounter ? -0.006 : repeatedReset ? -0.01 : 0
+  const spent = clamp(profile.recoveryCost + distancePenalty * 0.012 + timingPenalty * 0.02 + pressurePenalty * 0.4 + firstAttackPenalty + sequenceSpend, 0, player.statusMax)
 
   return {
     player: {
       ...player,
       swingState: 'recovery',
       lastImpactTimer: null,
-      status: clamp(player.status - spent, 0, player.statusMax),
+      status: clamp(player.status - spent + (repeatedReset && shot ? 0.006 : repeatedCounter && shot ? 0.003 : 0), 0, player.statusMax),
       plannedReceivePressure: null,
     },
     shot,
