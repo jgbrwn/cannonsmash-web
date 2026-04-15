@@ -24,6 +24,7 @@ import {
   getPlayerStanceOffset,
   getStatusRatio,
   getSwingImpactTick,
+  getNextRallySequenceState,
   inferRallyPatternFromShot,
   isBallHittableForSide,
   pickAIMoveTarget,
@@ -41,6 +42,7 @@ import {
   type PlayerState,
   type ReceivePressure,
   type RallyPattern,
+  type RallySequenceState,
   type ShotFamily,
   type ShotSolution,
   type ServePattern,
@@ -90,6 +92,7 @@ export default function App() {
   const [serveMode, setServeMode] = useState(false)
   const [lastShot, setLastShot] = useState<ShotSolution | null>(null)
   const [liveRallyPattern, setLiveRallyPattern] = useState<RallyPattern | null>(null)
+  const [rallySequence, setRallySequence] = useState<RallySequenceState>({ latest: null, dominant: null, streak: 0 })
   const [shotQueued, setShotQueued] = useState<ShotSolution | null>(null)
   const [score, setScore] = useState({ you: 0, opp: 0 })
   const [match, setMatch] = useState<MatchState>({
@@ -155,8 +158,8 @@ export default function App() {
     const baseBall = ball.status === 8
       ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
       : ball
-    return buildRallyStrokePlan(player, baseBall, target.x, target.y, liveRallyPattern)
-  }, [ball, isYourServe, liveRallyPattern, player, target.x, target.y])
+    return buildRallyStrokePlan(player, baseBall, target.x, target.y, liveRallyPattern, rallySequence)
+  }, [ball, isYourServe, liveRallyPattern, player, rallySequence, target.x, target.y])
   const defaultPreview = useMemo(() => {
     const baseBall = ball.status === 8
       ? (isYourServe ? tossForServe(player.side) : createNeutralBallForSide(player.side))
@@ -244,6 +247,7 @@ export default function App() {
         setLiveServePattern(null)
         setLiveReceivePressure(null)
         setLiveRallyPattern(null)
+        setRallySequence({ latest: null, dominant: null, streak: 0 })
         setServeWindowHint(null)
         playTone(audioRef, audioEnabledRef, pointMessage.includes('Game to') ? 460 : pointMessage.includes('Match to') ? 620 : 360, pointMessage.includes('Game to') ? 0.12 : pointMessage.includes('Match to') ? 0.18 : 0.08, 'sawtooth', 0.018)
         if (pointMessage.includes('Game to') || pointMessage.includes('Match to')) {
@@ -268,7 +272,7 @@ export default function App() {
               setMatch((m) => ({ ...m, gameOver: false, winner: null }))
             }
             const serveBall = tossForServe(opponent.side)
-            const serveChoice = chooseAIReturnShot(nextOpponent, serveBall, undefined, liveRallyPattern)
+            const serveChoice = chooseAIReturnShot(nextOpponent, serveBall, undefined, liveRallyPattern, rallySequence)
             nextBall = serveBall
             nextOpponent = startSwing(nextOpponent, serveChoice.stroke.shot, serveChoice.stroke.family, serveChoice.stroke.hand, serveChoice.stroke.servePattern ?? null, serveChoice.stroke.receivePressure ?? null, serveChoice.context)
             setLiveServePattern(serveChoice.stroke.servePattern ?? null)
@@ -291,7 +295,7 @@ export default function App() {
 
         if (isBallHittableForSide(nextBall, opponent.side) && nextOpponent.swingState === 'idle') {
           if (!aiPlanRef.current) {
-            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined, inferRallyPatternFromShot(lastShot, nextBall))
+            const choice = chooseAIReturnShot(nextOpponent, { ...nextBall }, liveServePattern ?? undefined, inferRallyPatternFromShot(lastShot, nextBall), rallySequence)
             const cadence = getCadenceWindow(choice.context, nextOpponent.archetype, choice.stroke.family, choice.stroke.servePattern)
             const commitPhase = choice.context === 'rally'
               ? choice.commitStyle === 'early-take'
@@ -419,6 +423,7 @@ export default function App() {
                   setLiveServePattern(null)
                   setLiveReceivePressure(null)
                   setLiveRallyPattern(nextRallyPattern)
+                  setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
                 } else {
                   setLiveServePattern(null)
                   setLiveReceivePressure(openingPreview.receivePressure ?? null)
@@ -426,6 +431,7 @@ export default function App() {
                 }
               } else if (playerContext === 'rally') {
                 setLiveRallyPattern(nextRallyPattern)
+                setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
               }
               nextMessage = openingResolved && playerContext !== 'rally'
                 ? playerContext === 'receive'
@@ -495,6 +501,7 @@ export default function App() {
                   setLiveServePattern(null)
                   setLiveReceivePressure(null)
                   setLiveRallyPattern(nextRallyPattern)
+                  setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
                 } else {
                   setLiveServePattern(null)
                   setLiveReceivePressure(choicePressure(nextOpponent.plannedFamily, liveServePattern))
@@ -502,6 +509,7 @@ export default function App() {
                 }
               } else if (nextOpponent.plannedContext === 'rally') {
                 setLiveRallyPattern(nextRallyPattern)
+                setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
               }
               nextMessage = openingResolved && nextOpponent.plannedContext !== 'rally'
                 ? nextOpponent.plannedContext === 'receive'
@@ -753,7 +761,7 @@ export default function App() {
     const stroke = assistOpeningBias
       ? plannedContext !== 'rally'
         ? buildOpeningStrokePlan(playerRef.current, baseBall, target.x, target.y, plannedContext, liveServePattern ?? undefined)
-        : buildRallyStrokePlan(playerRef.current, baseBall, target.x, target.y, liveRallyPattern)
+        : buildRallyStrokePlan(playerRef.current, baseBall, target.x, target.y, liveRallyPattern, rallySequence)
       : effectiveServeMode
         ? buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin, true)
         : buildStrokePlan(playerRef.current, baseBall, target.x, target.y, nextLevel, spin)
@@ -817,6 +825,7 @@ export default function App() {
     })
     setLastShot(null)
     setLiveRallyPattern(null)
+    setRallySequence({ latest: null, dominant: null, streak: 0 })
     setShotQueued(null)
     setLiveServePattern(null)
     setLiveReceivePressure(null)
@@ -895,6 +904,7 @@ export default function App() {
               <div>serve plan: {liveServePattern ?? openingPreview.servePattern ?? 'none'}</div>
               <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
               <div>rally pattern: {playerContext === 'rally' ? rallyPreview.rallyPattern : liveRallyPattern ?? 'none'}</div>
+              <div>rally seq: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}</div>
               <div>opening active: {playerContext === 'receive' || playerContext === 'opener' ? 'yes' : 'no'}</div>
               <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
               <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
@@ -978,7 +988,7 @@ export default function App() {
             <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
               receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? '—'}<br />
               manual: {defaultPreview.hand} {defaultPreview.family}
-              {playerContext === 'rally' ? <><br />assist rally: {rallyPreview.rallyPattern} · {rallyPreview.family} · {rallyPreview.commitStyle}</> : null}
+              {playerContext === 'rally' ? <><br />assist rally: {rallyPreview.rallyPattern} · {rallyPreview.family} · {rallyPreview.commitStyle}<br />sequence: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}</> : null}
             </div>
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}

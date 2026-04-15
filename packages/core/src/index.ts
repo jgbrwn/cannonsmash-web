@@ -411,6 +411,12 @@ export type ReceivePressure = 'low' | 'medium' | 'high'
 
 export type RallyPattern = 'counter' | 'pressure' | 'reset'
 
+export interface RallySequenceState {
+  latest: RallyPattern | null
+  dominant: RallyPattern | null
+  streak: number
+}
+
 export interface AITargetChoice {
   stroke: PlannedStroke
   score: number
@@ -1318,17 +1324,36 @@ export function inferRallyPatternFromShot(shot: ShotSolution | null, sourceBall?
   return 'counter'
 }
 
+export function getNextRallySequenceState(
+  current: RallySequenceState,
+  next: RallyPattern | null,
+): RallySequenceState {
+  if (!next) return { latest: null, dominant: current.dominant, streak: 0 }
+  const streak = current.latest === next ? current.streak + 1 : 1
+  const dominant = streak >= 2 ? next : current.dominant ?? next
+  return { latest: next, dominant, streak }
+}
+
 export function chooseRallyPattern(
   player: PlayerState,
   family: ShotFamily,
   ball: BallState,
   incomingPattern: RallyPattern | null,
+  sequence: RallySequenceState = { latest: null, dominant: null, streak: 0 },
 ): RallyPattern {
   const statusRatio = getStatusRatio(player)
   const highBall = ball.z > TABLE.height + 0.36
   const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+  const repeatedPressure = sequence.dominant === 'pressure' && sequence.streak >= 2
+  const repeatedCounter = sequence.dominant === 'counter' && sequence.streak >= 2
+  const repeatedReset = sequence.dominant === 'reset' && sequence.streak >= 2
 
   if (incomingPattern === 'pressure') {
+    if (repeatedPressure) {
+      if (family === 'cut') return 'reset'
+      if (family === 'block' || family === 'drive') return 'counter'
+      return highBall && statusRatio > 0.7 ? 'pressure' : 'counter'
+    }
     if (family === 'block') return 'counter'
     if (family === 'cut') return 'reset'
     if (family === 'drive') return player.archetype === 'PenAttack' && statusRatio > 0.64 && highBall ? 'pressure' : 'counter'
@@ -1336,12 +1361,23 @@ export function chooseRallyPattern(
   }
 
   if (incomingPattern === 'reset') {
+    if (repeatedReset) {
+      if (family === 'attack') return highBall && statusRatio > 0.34 ? 'pressure' : 'counter'
+      if (family === 'drive') return player.archetype === 'ShakeCut' ? 'reset' : 'pressure'
+      return family === 'cut' ? 'reset' : 'counter'
+    }
     if (family === 'attack') return highBall && statusRatio > 0.38 ? 'pressure' : 'counter'
     if (family === 'drive') return player.archetype === 'ShakeCut' ? 'reset' : statusRatio > 0.34 ? 'pressure' : 'counter'
     return family === 'cut' ? 'reset' : 'counter'
   }
 
   if (incomingPattern === 'counter') {
+    if (repeatedCounter) {
+      if (family === 'drive') return 'counter'
+      if (family === 'block') return 'counter'
+      if (family === 'attack') return highBall && statusRatio > 0.62 ? 'pressure' : 'counter'
+      return statusRatio > 0.58 ? 'counter' : 'reset'
+    }
     if (family === 'drive') return player.archetype === 'ShakeCut' ? 'counter' : closeToTable ? 'counter' : 'pressure'
     if (family === 'attack') return highBall && statusRatio > 0.5 ? 'pressure' : 'counter'
     if (family === 'block') return 'counter'
@@ -1362,10 +1398,11 @@ export function buildRallyStrokePlan(
   targetX: number,
   targetY: number,
   incomingPattern: RallyPattern | null = null,
+  sequence: RallySequenceState = { latest: null, dominant: null, streak: 0 },
 ): PlannedStroke & { rallyPattern: RallyPattern; commitStyle: 'early-take' | 'balanced' | 'late-read' } {
   const hand = getHandSideForBall(player, ball)
   const family = chooseRallyFamily(player, ball, hand, incomingPattern)
-  const rallyPattern = chooseRallyPattern(player, family, ball, incomingPattern)
+  const rallyPattern = chooseRallyPattern(player, family, ball, incomingPattern, sequence)
   const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
   const profile = getArchetypeProfile(player)
   const lane = player.side > 0 ? -1 : 1
@@ -1476,6 +1513,7 @@ export function chooseAIReturnShot(
   ball: BallState,
   incomingServePattern?: ServePattern,
   incomingRallyPattern: RallyPattern | null = null,
+  sequence: RallySequenceState = { latest: null, dominant: null, streak: 0 },
 ): AITargetChoice {
   const side = player.side
   const lane = side > 0 ? -1 : 1
@@ -1516,7 +1554,7 @@ export function chooseAIReturnShot(
   const hand = getHandSideForBall(player, ball)
   const family = chooseRallyFamily(player, ball, hand, incomingRallyPattern)
   const commitStyle = getRallyCommitStyle(player.archetype, family, hand, ball)
-  const rallyPattern = chooseRallyPattern(player, family, ball, incomingRallyPattern)
+  const rallyPattern = chooseRallyPattern(player, family, ball, incomingRallyPattern, sequence)
   const xs = family === 'attack'
     ? [-0.44, -0.24, 0.24, 0.44].map((f) => f * (TABLE.width / 2))
     : family === 'block'
