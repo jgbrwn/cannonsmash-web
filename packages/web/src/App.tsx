@@ -68,6 +68,44 @@ type MatchState = {
   transitionText: string | null
 }
 
+const getTempoRead = (sequence: RallySequenceState) => (
+  sequence.dominant === 'pressure' && sequence.streak >= 2
+    ? 'heavy exchange'
+    : sequence.dominant === 'counter' && sequence.streak >= 2
+      ? 'stable trade'
+      : sequence.dominant === 'reset' && sequence.streak >= 2
+        ? 'recovery ball'
+        : 'mixed'
+)
+
+const getTempoBadge = (sequence: RallySequenceState) => (
+  sequence.dominant === 'pressure' && sequence.streak >= 2
+    ? 'tempo: pressure on'
+    : sequence.dominant === 'counter' && sequence.streak >= 2
+      ? 'tempo: trade settled'
+      : sequence.dominant === 'reset' && sequence.streak >= 2
+        ? 'tempo: buying time'
+        : null
+)
+
+const describeTempoShift = (previous: RallySequenceState, next: RallySequenceState, actor: 'you' | 'opp') => {
+  if (!next.dominant || next.streak < 2) return null
+  if (previous.dominant === next.dominant && previous.streak >= 2) return null
+
+  if (next.dominant === 'pressure') {
+    if (previous.dominant === 'reset' && previous.streak >= 2) {
+      return actor === 'you' ? 'You reopen off the softer ball — pressure back on.' : 'Opponent reopens off the softer ball — pressure back on.'
+    }
+    return actor === 'you' ? 'Rally tightens — you are turning up the pressure.' : 'Rally tightens — opponent turns up the pressure.'
+  }
+
+  if (next.dominant === 'counter') {
+    return actor === 'you' ? 'Counter exchange settles in — hold the trade.' : 'Counter exchange settles in — opponent is happy to trade.'
+  }
+
+  return actor === 'you' ? 'Reset ball buys time — chance to recover shape.' : 'Opponent buys time with a reset ball.'
+}
+
 export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
@@ -119,6 +157,7 @@ export default function App() {
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [compactHud, setCompactHud] = useState(typeof window !== 'undefined' ? window.innerWidth < 700 : false)
   const [showDebugHud, setShowDebugHud] = useState(false)
+  const [tempoBadge, setTempoBadge] = useState<string | null>(null)
 
   const displayYouSide = match.sidesSwapped ? -1 : 1
   const serverSide = match.server === 'you' ? displayYouSide : (-displayYouSide as 1 | -1)
@@ -258,6 +297,7 @@ export default function App() {
         nextPlayer = createPlayer(nextDisplaySide, playerArchetype)
         nextOpponent = createPlayer(-nextDisplaySide as 1 | -1, oppArchetype)
         aiPlanRef.current = null
+        setTempoBadge(null)
         clearQueuedShot = true
       } else {
         const playerPlan = predictContactPoint(nextBall, player.side)
@@ -418,38 +458,60 @@ export default function App() {
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 780 : impact.quality < 0.38 ? 320 : 540, 0.045, 'triangle', 0.018)
               const openingResolved = shouldResolveOpeningPhase(playerContext, nextPlayer.plannedFamily, impact.quality)
               const nextRallyPattern = inferRallyPatternFromShot(impact.shot, nextBall)
+              const previousSequence = rallySequence
+              let nextSequence = previousSequence
+              let tempoShiftMessage: string | null = null
               if (playerContext === 'receive') {
                 if (openingResolved) {
+                  nextSequence = getNextRallySequenceState(previousSequence, nextRallyPattern)
                   setLiveServePattern(null)
                   setLiveReceivePressure(null)
                   setLiveRallyPattern(nextRallyPattern)
-                  setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
+                  setRallySequence(nextSequence)
+                  tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'you')
+                  setTempoBadge(getTempoBadge(nextSequence))
                 } else {
                   setLiveServePattern(null)
                   setLiveReceivePressure(openingPreview.receivePressure ?? null)
                   setLiveRallyPattern(null)
+                  setTempoBadge(null)
                 }
               } else if (playerContext === 'rally') {
+                nextSequence = getNextRallySequenceState(previousSequence, nextRallyPattern)
                 setLiveRallyPattern(nextRallyPattern)
-                setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
+                setRallySequence(nextSequence)
+                tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'you')
+                setTempoBadge(getTempoBadge(nextSequence))
               }
               nextMessage = openingResolved && playerContext !== 'rally'
                 ? playerContext === 'receive'
                   ? 'Receive phase stabilizes into open rally.'
                   : 'First attack lands — rally opens up.'
-                : impact.quality > 0.72
-                  ? 'Clean contact.'
-                  : impact.quality < 0.38
-                    ? player.plannedContext === 'opener' && player.plannedFamily === 'attack'
-                      ? 'First attack was too low to lift cleanly.'
-                      : player.plannedReceivePressure === 'high'
-                        ? 'Pressured receive broke down.'
-                        : 'Fatigued contact.'
-                    : impact.timingError > 0.05
-                      ? 'Late contact.'
-                      : impact.timingError < -0.05
-                        ? 'Early contact.'
-                        : 'Reached and guided it back.'
+                : tempoShiftMessage
+                  ? tempoShiftMessage
+                  : impact.quality > 0.72
+                    ? nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
+                      ? 'Clean contact — keep the pressure on.'
+                      : nextSequence.dominant === 'counter' && nextSequence.streak >= 2
+                        ? 'Clean contact — trade stays balanced.'
+                        : nextSequence.dominant === 'reset' && nextSequence.streak >= 2
+                          ? 'Clean reset — buying time.'
+                          : 'Clean contact.'
+                    : impact.quality < 0.38
+                      ? player.plannedContext === 'opener' && player.plannedFamily === 'attack'
+                        ? 'First attack was too low to lift cleanly.'
+                        : player.plannedReceivePressure === 'high'
+                          ? 'Pressured receive broke down.'
+                          : nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
+                            ? 'Heavy rally pressure is starting to rush you.'
+                            : 'Fatigued contact.'
+                      : impact.timingError > 0.05
+                        ? 'Late contact.'
+                        : impact.timingError < -0.05
+                          ? 'Early contact.'
+                          : nextSequence.dominant === 'reset' && nextSequence.streak >= 2
+                            ? 'Guided a safer recovery ball back.'
+                            : 'Reached and guided it back.'
             }
           } else {
             nextMessage = playerStatusRatio < 0.3 ? 'Too drained — missed contact.' : 'Missed contact — get into position first.'
@@ -496,34 +558,54 @@ export default function App() {
               playTone(audioRef, audioEnabledRef, impact.quality > 0.72 ? 700 : impact.quality < 0.38 ? 280 : 500, 0.045, 'square', 0.014)
               const openingResolved = shouldResolveOpeningPhase(nextOpponent.plannedContext, nextOpponent.plannedFamily, impact.quality)
               const nextRallyPattern = inferRallyPatternFromShot(impact.shot, nextBall)
+              const previousSequence = rallySequence
+              let nextSequence = previousSequence
+              let tempoShiftMessage: string | null = null
               if (nextOpponent.plannedContext === 'receive') {
                 if (openingResolved) {
+                  nextSequence = getNextRallySequenceState(previousSequence, nextRallyPattern)
                   setLiveServePattern(null)
                   setLiveReceivePressure(null)
                   setLiveRallyPattern(nextRallyPattern)
-                  setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
+                  setRallySequence(nextSequence)
+                  tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'opp')
+                  setTempoBadge(getTempoBadge(nextSequence))
                 } else {
                   setLiveServePattern(null)
                   setLiveReceivePressure(choicePressure(nextOpponent.plannedFamily, liveServePattern))
                   setLiveRallyPattern(null)
+                  setTempoBadge(null)
                 }
               } else if (nextOpponent.plannedContext === 'rally') {
+                nextSequence = getNextRallySequenceState(previousSequence, nextRallyPattern)
                 setLiveRallyPattern(nextRallyPattern)
-                setRallySequence((seq) => getNextRallySequenceState(seq, nextRallyPattern))
+                setRallySequence(nextSequence)
+                tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'opp')
+                setTempoBadge(getTempoBadge(nextSequence))
               }
               nextMessage = openingResolved && nextOpponent.plannedContext !== 'rally'
                 ? nextOpponent.plannedContext === 'receive'
                   ? 'Opponent settles the receive and the rally opens.'
                   : 'Opponent lands the first attack and opens the rally.'
-                : impact.quality > 0.72
-                  ? 'Opponent times the return cleanly.'
-                  : nextOpponent.plannedContext === 'opener' && nextOpponent.plannedFamily === 'attack'
-                    ? 'Opponent forces a low first attack and loses shape.'
-                    : nextOpponent.plannedReceivePressure === 'high'
-                      ? 'Opponent buckles under receive pressure.'
-                      : getStatusRatio(nextOpponent) < 0.3
-                        ? 'Opponent lunges a tired return.'
-                        : 'Opponent scrambles a return!'
+                : tempoShiftMessage
+                  ? tempoShiftMessage
+                  : impact.quality > 0.72
+                    ? nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
+                      ? 'Opponent keeps the pressure rally tight.'
+                      : nextSequence.dominant === 'counter' && nextSequence.streak >= 2
+                        ? 'Opponent keeps the counter trade stable.'
+                        : nextSequence.dominant === 'reset' && nextSequence.streak >= 2
+                          ? 'Opponent floats a reset to buy time.'
+                          : 'Opponent times the return cleanly.'
+                    : nextOpponent.plannedContext === 'opener' && nextOpponent.plannedFamily === 'attack'
+                      ? 'Opponent forces a low first attack and loses shape.'
+                      : nextOpponent.plannedReceivePressure === 'high'
+                        ? 'Opponent buckles under receive pressure.'
+                        : nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
+                          ? 'Opponent is rushing under the heavy exchange.'
+                          : getStatusRatio(nextOpponent) < 0.3
+                            ? 'Opponent lunges a tired return.'
+                            : 'Opponent scrambles a return!'
             }
           } else {
             aiPlanRef.current = null
@@ -826,6 +908,7 @@ export default function App() {
     setLastShot(null)
     setLiveRallyPattern(null)
     setRallySequence({ latest: null, dominant: null, streak: 0 })
+    setTempoBadge(null)
     setShotQueued(null)
     setLiveServePattern(null)
     setLiveReceivePressure(null)
@@ -896,6 +979,7 @@ export default function App() {
           <div>opp: {opponent.archetype} · {(oppStatusRatio * 100).toFixed(0)}%</div>
           <div>phase: {playerContext}</div>
           <div>{message}</div>
+          {tempoBadge && <div style={{ opacity: 0.82 }}>{tempoBadge}</div>}
           {serveWindowHint && <div style={{ opacity: 0.82 }}>hint: {serveWindowHint}</div>}
           {showDebugHud && (
             <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.12)' }}>
@@ -905,7 +989,7 @@ export default function App() {
               <div>receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? 'none'}</div>
               <div>rally pattern: {playerContext === 'rally' ? rallyPreview.rallyPattern : liveRallyPattern ?? 'none'}</div>
               <div>rally seq: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}</div>
-              <div>tempo read: {rallySequence.dominant === 'pressure' && rallySequence.streak >= 2 ? 'heavy exchange' : rallySequence.dominant === 'counter' && rallySequence.streak >= 2 ? 'stable trade' : rallySequence.dominant === 'reset' && rallySequence.streak >= 2 ? 'recovery ball' : 'mixed'}</div>
+              <div>tempo read: {getTempoRead(rallySequence)}</div>
               <div>opening active: {playerContext === 'receive' || playerContext === 'opener' ? 'yes' : 'no'}</div>
               <div>your pos: {player.x.toFixed(2)}, {player.y.toFixed(2)} · stance {playerHand}</div>
               <div>your reach: {playerContact.distance.toFixed(2)} {playerContact.reachable ? '✓' : '×'}</div>
@@ -989,7 +1073,7 @@ export default function App() {
             <div style={{ fontSize: 12, marginTop: 8, lineHeight: 1.45, opacity: 0.92 }}>
               receive pressure: {liveReceivePressure ?? openingPreview.receivePressure ?? '—'}<br />
               manual: {defaultPreview.hand} {defaultPreview.family}
-              {playerContext === 'rally' ? <><br />assist rally: {rallyPreview.rallyPattern} · {rallyPreview.family} · {rallyPreview.commitStyle}<br />sequence: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}<br />tempo: {rallySequence.dominant === 'pressure' && rallySequence.streak >= 2 ? 'heavy exchange' : rallySequence.dominant === 'counter' && rallySequence.streak >= 2 ? 'stable trade' : rallySequence.dominant === 'reset' && rallySequence.streak >= 2 ? 'recovery ball' : 'mixed'}</> : null}
+              {playerContext === 'rally' ? <><br />assist rally: {rallyPreview.rallyPattern} · {rallyPreview.family} · {rallyPreview.commitStyle}<br />sequence: {rallySequence.dominant ?? 'none'} · {rallySequence.streak}<br />tempo: {getTempoRead(rallySequence)}</> : null}
             </div>
             {contactPrediction && <div style={{ fontSize: 12, marginTop: 8, opacity: 0.9 }}>assist intercept in {(contactPrediction.etaTicks * TICK).toFixed(2)}s</div>}
             {opponentPrediction && <div style={{ fontSize: 12, marginTop: 4, opacity: 0.75 }}>opp intercept in {(opponentPrediction.etaTicks * TICK).toFixed(2)}s</div>}
