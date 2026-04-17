@@ -88,22 +88,105 @@ const getTempoBadge = (sequence: RallySequenceState) => (
         : null
 )
 
-const describeTempoShift = (previous: RallySequenceState, next: RallySequenceState, actor: 'you' | 'opp') => {
+const getArchetypeTone = (archetype: PlayerArchetype) => (
+  archetype === 'PenAttack'
+    ? {
+        pressure: { shift: 'Pressure takes over — step in and keep it on.', reopen: 'You reopen fast off the softer ball — pressure back on.' },
+        counter: 'Counter exchange settles in — stay ready to jump first.',
+        reset: 'Reset ball buys time — recover now and look to reopen.',
+      }
+    : archetype === 'PenDrive'
+      ? {
+          pressure: { shift: 'Rally tightens — drive pressure is building.', reopen: 'You drive back in off the softer ball — pressure back on.' },
+          counter: 'Counter exchange settles in — the drive trade is on.',
+          reset: 'Reset ball buys time — rebuild the rally shape.',
+        }
+      : {
+          pressure: { shift: 'Rally tightens — pressure is coming back through spin.', reopen: 'You turn defense into pressure off the softer ball.' },
+          counter: 'Counter exchange settles in — absorb pace and stay balanced.',
+          reset: 'Reset ball buys time — plenty of room to recover shape.',
+        }
+)
+
+const describeTempoShift = (previous: RallySequenceState, next: RallySequenceState, actor: 'you' | 'opp', archetype: PlayerArchetype) => {
   if (!next.dominant || next.streak < 2) return null
   if (previous.dominant === next.dominant && previous.streak >= 2) return null
 
+  const tone = getArchetypeTone(archetype)
+  if (actor === 'you') {
+    if (next.dominant === 'pressure') return previous.dominant === 'reset' && previous.streak >= 2 ? tone.pressure.reopen : tone.pressure.shift
+    if (next.dominant === 'counter') return tone.counter
+    return tone.reset
+  }
+
   if (next.dominant === 'pressure') {
     if (previous.dominant === 'reset' && previous.streak >= 2) {
-      return actor === 'you' ? 'You reopen off the softer ball — pressure back on.' : 'Opponent reopens off the softer ball — pressure back on.'
+      return archetype === 'ShakeCut'
+        ? 'Opponent turns the soft ball into fresh pressure.'
+        : archetype === 'PenDrive'
+          ? 'Opponent drives back in off the softer ball — pressure back on.'
+          : 'Opponent reopens quickly off the softer ball — pressure back on.'
     }
-    return actor === 'you' ? 'Rally tightens — you are turning up the pressure.' : 'Rally tightens — opponent turns up the pressure.'
+    return archetype === 'ShakeCut'
+      ? 'Opponent starts winding the rally tighter through spin.'
+      : archetype === 'PenDrive'
+        ? 'Opponent starts leaning into a firmer drive exchange.'
+        : 'Opponent steps in and turns the pressure up.'
   }
 
   if (next.dominant === 'counter') {
-    return actor === 'you' ? 'Counter exchange settles in — hold the trade.' : 'Counter exchange settles in — opponent is happy to trade.'
+    return archetype === 'ShakeCut'
+      ? 'Opponent settles into a measured trade.'
+      : archetype === 'PenDrive'
+        ? 'Opponent looks comfortable in the drive trade.'
+        : 'Opponent is happy to trade on the counter.'
   }
 
-  return actor === 'you' ? 'Reset ball buys time — chance to recover shape.' : 'Opponent buys time with a reset ball.'
+  return archetype === 'ShakeCut'
+    ? 'Opponent drops in a safer reset to recover shape.'
+    : archetype === 'PenDrive'
+      ? 'Opponent rolls a reset ball to steady the exchange.'
+      : 'Opponent buys time with a softer reset ball.'
+}
+
+const describeTempoContact = (actor: 'you' | 'opp', archetype: PlayerArchetype, sequence: RallySequenceState, quality: number, timingError: number, context: StrokeContext, family: ShotFamily, receivePressure: ReceivePressure | null | undefined, statusRatio: number) => {
+  if (quality > 0.72) {
+    if (sequence.dominant === 'pressure' && sequence.streak >= 2) {
+      if (actor === 'you') return archetype === 'ShakeCut' ? 'Clean pressure ball — spin is starting to bite.' : archetype === 'PenDrive' ? 'Clean pressure ball — keep driving through it.' : 'Clean contact — stay on top of the pressure.'
+      return archetype === 'ShakeCut' ? 'Opponent keeps loading the rally with pressure spin.' : archetype === 'PenDrive' ? 'Opponent keeps the drive pressure firm.' : 'Opponent keeps the pressure rally tight.'
+    }
+    if (sequence.dominant === 'counter' && sequence.streak >= 2) {
+      if (actor === 'you') return archetype === 'PenAttack' ? 'Clean counter — good ball to hold the trade.' : archetype === 'PenDrive' ? 'Clean counter — the drive trade stays solid.' : 'Clean counter — you stay balanced through the exchange.'
+      return archetype === 'PenAttack' ? 'Opponent stays sharp in the counter trade.' : archetype === 'PenDrive' ? 'Opponent keeps the drive trade stable.' : 'Opponent keeps the exchange balanced.'
+    }
+    if (sequence.dominant === 'reset' && sequence.streak >= 2) {
+      if (actor === 'you') return archetype === 'ShakeCut' ? 'Clean reset — plenty of shape on the recovery ball.' : archetype === 'PenDrive' ? 'Clean reset — enough time to rebuild the drive.' : 'Clean reset — buying time to attack again.'
+      return archetype === 'ShakeCut' ? 'Opponent floats a shaped reset to recover.' : archetype === 'PenDrive' ? 'Opponent rolls a reset to steady the rally.' : 'Opponent floats a reset to buy time.'
+    }
+    return actor === 'you' ? 'Clean contact.' : 'Opponent times the return cleanly.'
+  }
+
+  if (quality < 0.38) {
+    if (context === 'opener' && family === 'attack') {
+      return actor === 'you' ? 'First attack was too low to lift cleanly.' : 'Opponent forces a low first attack and loses shape.'
+    }
+    if (receivePressure === 'high') {
+      return actor === 'you' ? 'Pressured receive broke down.' : 'Opponent buckles under receive pressure.'
+    }
+    if (sequence.dominant === 'pressure' && sequence.streak >= 2) {
+      return actor === 'you'
+        ? archetype === 'ShakeCut' ? 'Heavy pressure is forcing a rushed recovery.' : 'Heavy rally pressure is starting to rush you.'
+        : archetype === 'PenAttack' ? 'Opponent is rushing under the heavy exchange.' : 'Opponent is losing shape under the pressure.'
+    }
+    return actor === 'you' ? 'Fatigued contact.' : statusRatio < 0.3 ? 'Opponent lunges a tired return.' : 'Opponent scrambles a return!'
+  }
+
+  if (timingError > 0.05) return actor === 'you' ? 'Late contact.' : 'Opponent is late on the ball.'
+  if (timingError < -0.05) return actor === 'you' ? 'Early contact.' : 'Opponent reaches too early.'
+  if (sequence.dominant === 'reset' && sequence.streak >= 2) {
+    return actor === 'you' ? 'Guided a safer recovery ball back.' : 'Opponent guides back a safer recovery ball.'
+  }
+  return actor === 'you' ? 'Reached and guided it back.' : 'Opponent scrambles a return!'
 }
 
 export default function App() {
@@ -468,7 +551,7 @@ export default function App() {
                   setLiveReceivePressure(null)
                   setLiveRallyPattern(nextRallyPattern)
                   setRallySequence(nextSequence)
-                  tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'you')
+                  tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'you', nextPlayer.archetype)
                   setTempoBadge(getTempoBadge(nextSequence))
                 } else {
                   setLiveServePattern(null)
@@ -480,7 +563,7 @@ export default function App() {
                 nextSequence = getNextRallySequenceState(previousSequence, nextRallyPattern)
                 setLiveRallyPattern(nextRallyPattern)
                 setRallySequence(nextSequence)
-                tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'you')
+                tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'you', nextPlayer.archetype)
                 setTempoBadge(getTempoBadge(nextSequence))
               }
               nextMessage = openingResolved && playerContext !== 'rally'
@@ -489,29 +572,17 @@ export default function App() {
                   : 'First attack lands — rally opens up.'
                 : tempoShiftMessage
                   ? tempoShiftMessage
-                  : impact.quality > 0.72
-                    ? nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
-                      ? 'Clean contact — keep the pressure on.'
-                      : nextSequence.dominant === 'counter' && nextSequence.streak >= 2
-                        ? 'Clean contact — trade stays balanced.'
-                        : nextSequence.dominant === 'reset' && nextSequence.streak >= 2
-                          ? 'Clean reset — buying time.'
-                          : 'Clean contact.'
-                    : impact.quality < 0.38
-                      ? player.plannedContext === 'opener' && player.plannedFamily === 'attack'
-                        ? 'First attack was too low to lift cleanly.'
-                        : player.plannedReceivePressure === 'high'
-                          ? 'Pressured receive broke down.'
-                          : nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
-                            ? 'Heavy rally pressure is starting to rush you.'
-                            : 'Fatigued contact.'
-                      : impact.timingError > 0.05
-                        ? 'Late contact.'
-                        : impact.timingError < -0.05
-                          ? 'Early contact.'
-                          : nextSequence.dominant === 'reset' && nextSequence.streak >= 2
-                            ? 'Guided a safer recovery ball back.'
-                            : 'Reached and guided it back.'
+                  : describeTempoContact(
+                      'you',
+                      nextPlayer.archetype,
+                      nextSequence,
+                      impact.quality,
+                      impact.timingError,
+                      player.plannedContext,
+                      player.plannedFamily,
+                      player.plannedReceivePressure,
+                      playerStatusRatio,
+                    )
             }
           } else {
             nextMessage = playerStatusRatio < 0.3 ? 'Too drained — missed contact.' : 'Missed contact — get into position first.'
@@ -568,7 +639,7 @@ export default function App() {
                   setLiveReceivePressure(null)
                   setLiveRallyPattern(nextRallyPattern)
                   setRallySequence(nextSequence)
-                  tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'opp')
+                  tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'opp', nextOpponent.archetype)
                   setTempoBadge(getTempoBadge(nextSequence))
                 } else {
                   setLiveServePattern(null)
@@ -580,7 +651,7 @@ export default function App() {
                 nextSequence = getNextRallySequenceState(previousSequence, nextRallyPattern)
                 setLiveRallyPattern(nextRallyPattern)
                 setRallySequence(nextSequence)
-                tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'opp')
+                tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'opp', nextOpponent.archetype)
                 setTempoBadge(getTempoBadge(nextSequence))
               }
               nextMessage = openingResolved && nextOpponent.plannedContext !== 'rally'
@@ -589,23 +660,17 @@ export default function App() {
                   : 'Opponent lands the first attack and opens the rally.'
                 : tempoShiftMessage
                   ? tempoShiftMessage
-                  : impact.quality > 0.72
-                    ? nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
-                      ? 'Opponent keeps the pressure rally tight.'
-                      : nextSequence.dominant === 'counter' && nextSequence.streak >= 2
-                        ? 'Opponent keeps the counter trade stable.'
-                        : nextSequence.dominant === 'reset' && nextSequence.streak >= 2
-                          ? 'Opponent floats a reset to buy time.'
-                          : 'Opponent times the return cleanly.'
-                    : nextOpponent.plannedContext === 'opener' && nextOpponent.plannedFamily === 'attack'
-                      ? 'Opponent forces a low first attack and loses shape.'
-                      : nextOpponent.plannedReceivePressure === 'high'
-                        ? 'Opponent buckles under receive pressure.'
-                        : nextSequence.dominant === 'pressure' && nextSequence.streak >= 2
-                          ? 'Opponent is rushing under the heavy exchange.'
-                          : getStatusRatio(nextOpponent) < 0.3
-                            ? 'Opponent lunges a tired return.'
-                            : 'Opponent scrambles a return!'
+                  : describeTempoContact(
+                      'opp',
+                      nextOpponent.archetype,
+                      nextSequence,
+                      impact.quality,
+                      impact.timingError,
+                      nextOpponent.plannedContext,
+                      nextOpponent.plannedFamily,
+                      nextOpponent.plannedReceivePressure,
+                      getStatusRatio(nextOpponent),
+                    )
             }
           } else {
             aiPlanRef.current = null
