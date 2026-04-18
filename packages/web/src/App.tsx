@@ -472,14 +472,14 @@ export default function App() {
             nextMessage = chooseMessage(nextMessage, choice.context === 'receive'
               ? `Opponent shapes a ${choice.stroke.family} receive${liveServePattern ? ` vs ${liveServePattern}` : ''}...`
               : choice.context === 'opener'
-                ? `Opponent looks for a ${choice.stroke.family} opener on the ${cadence.contactPhase.replace('-', ' ')}...`
+                ? `Opponent eyes a ${choice.stroke.family} opener on the ${cadence.contactPhase.replace('-', ' ')}...`
                 : choice.commitStyle === 'early-take'
-                  ? `Opponent steps in early for a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
+                  ? `Opponent steps in early for ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
                   : choice.commitStyle === 'late-read'
-                    ? `Opponent waits on a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
+                    ? `Opponent waits on ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
                     : choice.attack
-                      ? `Opponent lines up a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
-                      : `Opponent reads a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`)
+                      ? `Opponent lines up ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
+                      : `Opponent reads ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`)
           }
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
@@ -496,15 +496,15 @@ export default function App() {
                 ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
                 : aiPlanRef.current.context === 'opener'
                   ? aiPlanRef.current.thirdBallAttack
-                    ? 'Opponent jumps on the planned third-ball attack early!'
-                    : 'Opponent jumps on the first attack phase!'
+                    ? 'Opponent jumps the third-ball attack early!'
+                    : 'Opponent jumps the first attack phase!'
                   : aiPlanRef.current.commitStyle === 'early-take'
-                    ? `Opponent takes the ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family} early.`
+                    ? `Opponent takes ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family} early.`
                     : aiPlanRef.current.commitStyle === 'late-read'
-                      ? `Opponent hangs back and plays a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
+                      ? `Opponent hangs back on ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
                       : aiPlanRef.current.attack
-                        ? `Opponent commits into a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} attack!`
-                        : `Opponent settles into a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`)
+                        ? `Opponent commits into ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} attack!`
+                        : `Opponent settles into ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`)
               aiPlanRef.current = null
             }
           }
@@ -955,7 +955,7 @@ export default function App() {
       plannedContext !== 'rally'
         ? `Swing started — ${plannedContext} ${stroke.hand} ${stroke.family}.`
         : effectiveServeMode
-          ? 'Serve swing started — move through the ball.'
+          ? 'Serve swing started — move through it.'
           : `Swing started — ${stroke.hand} ${stroke.family}.`,
     )
   }
