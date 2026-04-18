@@ -1251,25 +1251,27 @@ export function chooseRallyFamily(player: PlayerState, ball: BallState, hand: Ha
   const highBall = ball.z > TABLE.height + 0.36
   const lowBall = ball.z < TABLE.height + 0.2
   const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+  const tired = statusRatio < 0.34
+  const pressuredButFresh = statusRatio > 0.62
 
   if (incomingPattern === 'pressure') {
-    if (player.archetype === 'ShakeCut') return lowBall || hand === 'backhand' ? 'cut' : 'block'
-    if (player.archetype === 'PenDrive') return hand === 'backhand' || closeToTable ? 'block' : highBall && hand === 'forehand' && statusRatio > 0.62 ? 'attack' : 'drive'
-    if (hand === 'backhand' || closeToTable) return 'block'
-    return highBall && hand === 'forehand' && statusRatio > 0.52 ? 'attack' : 'drive'
+    if (player.archetype === 'ShakeCut') return lowBall || hand === 'backhand' || tired ? 'cut' : 'block'
+    if (player.archetype === 'PenDrive') return hand === 'backhand' || closeToTable || tired ? 'block' : highBall && hand === 'forehand' && pressuredButFresh ? 'attack' : 'drive'
+    if (hand === 'backhand' || closeToTable || tired) return 'block'
+    return highBall && hand === 'forehand' && statusRatio > 0.56 ? 'attack' : 'drive'
   }
 
   if (incomingPattern === 'reset') {
     if (player.archetype === 'ShakeCut') return highBall && hand === 'forehand' && statusRatio > 0.68 ? 'drive' : 'cut'
-    if (player.archetype === 'PenDrive') return hand === 'forehand' && statusRatio > 0.42 ? (highBall ? 'attack' : 'drive') : 'drive'
-    return hand === 'forehand' && statusRatio > 0.36 ? (highBall ? 'attack' : 'drive') : 'block'
+    if (player.archetype === 'PenDrive') return tired ? 'drive' : hand === 'forehand' && statusRatio > 0.42 ? (highBall ? 'attack' : 'drive') : 'drive'
+    return tired ? 'drive' : hand === 'forehand' && statusRatio > 0.36 ? (highBall ? 'attack' : 'drive') : 'block'
   }
 
   if (incomingPattern === 'counter') {
-    if (player.archetype === 'ShakeCut') return hand === 'backhand' || lowBall ? 'block' : 'cut'
-    if (player.archetype === 'PenDrive') return hand === 'backhand' || closeToTable ? 'block' : 'drive'
-    if (hand === 'forehand' && highBall && statusRatio > 0.42) return 'attack'
-    return hand === 'forehand' ? 'drive' : 'block'
+    if (player.archetype === 'ShakeCut') return hand === 'backhand' || lowBall ? 'block' : tired ? 'cut' : 'cut'
+    if (player.archetype === 'PenDrive') return hand === 'backhand' || closeToTable || tired ? 'block' : 'drive'
+    if (hand === 'forehand' && highBall && statusRatio > 0.46) return 'attack'
+    return hand === 'forehand' && !tired ? 'drive' : 'block'
   }
 
   if (player.archetype === 'PenAttack') {
@@ -1365,6 +1367,7 @@ export function chooseRallyPattern(
   const statusRatio = getStatusRatio(player)
   const highBall = ball.z > TABLE.height + 0.36
   const closeToTable = Math.abs(ball.y) < TABLE.length * 0.19
+  const tired = statusRatio < 0.34
   const repeatedPressure = sequence.dominant === 'pressure' && sequence.streak >= 2
   const repeatedCounter = sequence.dominant === 'counter' && sequence.streak >= 2
   const repeatedReset = sequence.dominant === 'reset' && sequence.streak >= 2
@@ -1372,45 +1375,45 @@ export function chooseRallyPattern(
   if (incomingPattern === 'pressure') {
     if (repeatedPressure) {
       if (family === 'cut') return 'reset'
-      if (family === 'block' || family === 'drive') return 'counter'
+      if (family === 'block' || family === 'drive') return tired ? 'reset' : 'counter'
       return highBall && statusRatio > 0.7 ? 'pressure' : 'counter'
     }
-    if (family === 'block') return 'counter'
+    if (family === 'block') return tired ? 'reset' : 'counter'
     if (family === 'cut') return 'reset'
-    if (family === 'drive') return player.archetype === 'PenAttack' && statusRatio > 0.64 && highBall ? 'pressure' : 'counter'
+    if (family === 'drive') return player.archetype === 'PenAttack' && statusRatio > 0.64 && highBall ? 'pressure' : tired ? 'reset' : 'counter'
     return highBall && statusRatio > 0.6 ? 'pressure' : 'counter'
   }
 
   if (incomingPattern === 'reset') {
     if (repeatedReset) {
       if (family === 'attack') return highBall && statusRatio > 0.34 ? 'pressure' : 'counter'
-      if (family === 'drive') return player.archetype === 'ShakeCut' ? 'reset' : 'pressure'
+      if (family === 'drive') return player.archetype === 'ShakeCut' || tired ? 'reset' : 'pressure'
       return family === 'cut' ? 'reset' : 'counter'
     }
     if (family === 'attack') return highBall && statusRatio > 0.38 ? 'pressure' : 'counter'
-    if (family === 'drive') return player.archetype === 'ShakeCut' ? 'reset' : statusRatio > 0.34 ? 'pressure' : 'counter'
+    if (family === 'drive') return player.archetype === 'ShakeCut' || tired ? 'reset' : statusRatio > 0.34 ? 'pressure' : 'counter'
     return family === 'cut' ? 'reset' : 'counter'
   }
 
   if (incomingPattern === 'counter') {
     if (repeatedCounter) {
-      if (family === 'drive') return 'counter'
+      if (family === 'drive') return tired ? 'reset' : 'counter'
       if (family === 'block') return 'counter'
       if (family === 'attack') return highBall && statusRatio > 0.62 ? 'pressure' : 'counter'
       return statusRatio > 0.58 ? 'counter' : 'reset'
     }
-    if (family === 'drive') return player.archetype === 'ShakeCut' ? 'counter' : closeToTable ? 'counter' : 'pressure'
+    if (family === 'drive') return player.archetype === 'ShakeCut' ? 'counter' : closeToTable || tired ? 'counter' : 'pressure'
     if (family === 'attack') return highBall && statusRatio > 0.5 ? 'pressure' : 'counter'
     if (family === 'block') return 'counter'
     return statusRatio > 0.5 ? 'counter' : 'reset'
   }
 
   if (family === 'attack') return highBall && statusRatio > 0.48 ? 'pressure' : 'counter'
-  if (family === 'block') return closeToTable ? 'counter' : 'reset'
+  if (family === 'block') return closeToTable && !tired ? 'counter' : 'reset'
   if (family === 'cut') return statusRatio > 0.45 ? 'reset' : 'counter'
   if (player.archetype === 'PenAttack' && statusRatio > 0.52) return 'pressure'
   if (player.archetype === 'ShakeCut') return 'reset'
-  return closeToTable ? 'counter' : 'pressure'
+  return closeToTable || tired ? 'counter' : 'pressure'
 }
 
 export function buildRallyStrokePlan(
@@ -1607,6 +1610,9 @@ export function chooseAIReturnShot(
       if (rallyPattern === 'pressure') score += family === 'attack' || family === 'drive' ? 0.12 : -0.04
       if (rallyPattern === 'counter') score += family === 'block' || family === 'drive' ? 0.08 : 0.02
       if (rallyPattern === 'reset') score += family === 'cut' || family === 'block' ? 0.1 : -0.03
+      if (statusRatio < 0.34 && rallyPattern === 'pressure') score -= 0.12
+      if (statusRatio < 0.34 && (family === 'cut' || family === 'block') && rallyPattern === 'reset') score += 0.08
+      if (statusRatio > 0.68 && incomingRallyPattern === 'reset' && rallyPattern === 'pressure') score += 0.05
       if (!best || score > best.score) best = { stroke, score, targetX, targetY, attack: family === 'attack', context, thirdBallAttack, commitStyle, rallyPattern }
     }
   }
