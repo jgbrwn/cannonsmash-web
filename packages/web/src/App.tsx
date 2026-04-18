@@ -189,6 +189,22 @@ const describeTempoContact = (actor: 'you' | 'opp', archetype: PlayerArchetype, 
   return actor === 'you' ? 'Reached and guided it back.' : 'Opponent scrambles a return!'
 }
 
+const getMessagePriority = (message: string | null) => {
+  if (!message) return 0
+  if (message.includes('Match to') || message.includes('Game to') || message.includes('Game won') || message.includes('Game lost')) return 6
+  if (message.includes('fault') || message.includes('Match over') || message.includes('Reset match')) return 5
+  if (message.includes('rally opens') || message.includes('opens up') || message.includes('switch ends')) return 4
+  if (message.includes('pressure back on') || message.includes('Pressure takes over') || message.includes('Rally tightens') || message.includes('Counter exchange settles') || message.includes('Reset ball buys time') || message.includes('Opponent starts') || message.includes('Opponent steps in') || message.includes('Opponent settles into') || message.includes('Opponent drops in') || message.includes('Opponent buys time')) return 3
+  if (message.includes('Clean') || message.includes('Late contact') || message.includes('Early contact') || message.includes('guided it back') || message.includes('scrambles') || message.includes('tired return') || message.includes('rushed')) return 2
+  return 1
+}
+
+const chooseMessage = (current: string | null, candidate: string | null) => {
+  if (!candidate) return current
+  if (!current) return candidate
+  return getMessagePriority(candidate) >= getMessagePriority(current) ? candidate : current
+}
+
 export default function App() {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const pressStartRef = useRef<number | null>(null)
@@ -375,7 +391,7 @@ export default function App() {
         if (pointMessage.includes('Game to') || pointMessage.includes('Match to')) {
           setTimeout(() => playTone(audioRef, audioEnabledRef, pointMessage.includes('Match to') ? 780 : 620, pointMessage.includes('Match to') ? 0.22 : 0.14, 'triangle', 0.016), 90)
         }
-        nextMessage = pointMessage
+        nextMessage = chooseMessage(nextMessage, pointMessage)
         nextBall = createIdleBall()
         nextPlayer = createPlayer(nextDisplaySide, playerArchetype)
         nextOpponent = createPlayer(-nextDisplaySide as 1 | -1, oppArchetype)
@@ -390,7 +406,7 @@ export default function App() {
           if (serverSide === opponent.side && aiCooldownRef.current === 0 && nextOpponent.swingState === 'idle') {
             if (match.betweenGames) {
               setMatch((m) => ({ ...m, betweenGames: false, gameOver: false, winner: null, transitionText: null }))
-              nextMessage = `Game ${match.gameNumber} start.`
+              nextMessage = chooseMessage(nextMessage, `Game ${match.gameNumber} start.`)
             } else if (match.gameOver && !match.matchOver) {
               setMatch((m) => ({ ...m, gameOver: false, winner: null }))
             }
@@ -401,11 +417,11 @@ export default function App() {
             setLiveServePattern(serveChoice.stroke.servePattern ?? null)
             setLiveReceivePressure(null)
             aiCooldownRef.current = 80
-            nextMessage = serveChoice.stroke.servePattern === 'short-spin'
+            nextMessage = chooseMessage(nextMessage, serveChoice.stroke.servePattern === 'short-spin'
               ? 'Opponent opens with a short spin serve...'
               : serveChoice.stroke.servePattern === 'fast-long'
                 ? 'Opponent fires a fast long serve...'
-                : 'Opponent serves wide to set up the next ball...'
+                : 'Opponent serves wide to set up the next ball...')
           }
         }
 
@@ -453,7 +469,7 @@ export default function App() {
               commitStyle: choice.commitStyle,
               rallyPattern: choice.rallyPattern,
             }
-            nextMessage = choice.context === 'receive'
+            nextMessage = chooseMessage(nextMessage, choice.context === 'receive'
               ? `Opponent shapes a ${choice.stroke.family} receive${liveServePattern ? ` vs ${liveServePattern}` : ''}...`
               : choice.context === 'opener'
                 ? `Opponent looks for a ${choice.stroke.family} opener on the ${cadence.contactPhase.replace('-', ' ')}...`
@@ -463,7 +479,7 @@ export default function App() {
                     ? `Opponent waits on a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
                     : choice.attack
                       ? `Opponent lines up a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
-                      : `Opponent reads a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`
+                      : `Opponent reads a ${choice.rallyPattern} ${choice.stroke.hand} ${choice.stroke.family}...`)
           }
           if (aiPlanRef.current) {
             aiPlanRef.current.swingAt -= 1
@@ -476,7 +492,7 @@ export default function App() {
                     ? 70
                     : 63
                 : 54
-              nextMessage = aiPlanRef.current.context === 'receive'
+              nextMessage = chooseMessage(nextMessage, aiPlanRef.current.context === 'receive'
                 ? `Opponent commits to the ${aiPlanRef.current.family} receive.`
                 : aiPlanRef.current.context === 'opener'
                   ? aiPlanRef.current.thirdBallAttack
@@ -488,7 +504,7 @@ export default function App() {
                       ? `Opponent hangs back and plays a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
                       : aiPlanRef.current.attack
                         ? `Opponent commits into a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} attack!`
-                        : `Opponent settles into a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`
+                        : `Opponent settles into a ${aiPlanRef.current.rallyPattern} ${aiPlanRef.current.hand} ${aiPlanRef.current.family}.`)
               aiPlanRef.current = null
             }
           }
@@ -511,13 +527,13 @@ export default function App() {
                 setLiveReceivePressure(null)
                 setServeWindowHint('Fault: serve clipped the net or missed the two-bounce window.')
                 playTone(audioRef, audioEnabledRef, 220, 0.09, 'square', 0.02)
-                nextMessage = serveCheck.reason === 'net'
+                nextMessage = chooseMessage(nextMessage, serveCheck.reason === 'net'
                   ? 'Serve fault — into the net.'
                   : serveCheck.reason === 'long'
                     ? 'Serve fault — long after the first bounce.'
                     : serveCheck.reason === 'wide'
                       ? 'Serve fault — too wide.'
-                      : 'Serve fault — wrong bounce order.'
+                      : 'Serve fault — wrong bounce order.')
               } else {
                 nextBall = applyShot(nextBall, impact.shot)
                 nextLastShot = impact.shot
@@ -528,9 +544,9 @@ export default function App() {
                 setLiveServePattern(openingPreview.servePattern ?? null)
                 setLiveReceivePressure(null)
                 setLiveRallyPattern(null)
-                nextMessage = impact.quality > 0.72 && openingPreview.servePattern
+                nextMessage = chooseMessage(nextMessage, impact.quality > 0.72 && openingPreview.servePattern
                   ? `Clean ${openingPreview.servePattern} serve.`
-                  : 'Legal serve in.'
+                  : 'Legal serve in.')
               }
             } else {
               nextBall = applyShot(nextBall, impact.shot)
@@ -566,7 +582,7 @@ export default function App() {
                 tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'you', nextPlayer.archetype)
                 setTempoBadge(getTempoBadge(nextSequence))
               }
-              nextMessage = openingResolved && playerContext !== 'rally'
+              nextMessage = chooseMessage(nextMessage, openingResolved && playerContext !== 'rally'
                 ? playerContext === 'receive'
                   ? 'Receive phase stabilizes into open rally.'
                   : 'First attack lands — rally opens up.'
@@ -582,10 +598,10 @@ export default function App() {
                       player.plannedFamily,
                       player.plannedReceivePressure,
                       playerStatusRatio,
-                    )
+                    ))
             }
           } else {
-            nextMessage = playerStatusRatio < 0.3 ? 'Too drained — missed contact.' : 'Missed contact — get into position first.'
+            nextMessage = chooseMessage(nextMessage, playerStatusRatio < 0.3 ? 'Too drained — missed contact.' : 'Missed contact — get into position first.')
           }
         }
 
@@ -600,13 +616,13 @@ export default function App() {
                 nextBall = createIdleBall()
                 setLiveServePattern(null)
                 setLiveReceivePressure(null)
-                nextMessage = serveCheck.reason === 'net'
+                nextMessage = chooseMessage(nextMessage, serveCheck.reason === 'net'
                   ? 'Opponent faults the serve into the net.'
                   : serveCheck.reason === 'long'
                     ? 'Opponent serves long — fault.'
                     : serveCheck.reason === 'wide'
                       ? 'Opponent misses the sideline on serve.'
-                      : 'Opponent serve fault.'
+                      : 'Opponent serve fault.')
                 playTone(audioRef, audioEnabledRef, 210, 0.09, 'square', 0.02)
               } else {
                 nextBall = applyShot(nextBall, impact.shot)
@@ -617,9 +633,9 @@ export default function App() {
                 setLiveServePattern(nextOpponent.plannedServePattern ?? null)
                 setLiveReceivePressure(null)
                 setLiveRallyPattern(null)
-                nextMessage = impact.quality > 0.72 && nextOpponent.plannedServePattern
+                nextMessage = chooseMessage(nextMessage, impact.quality > 0.72 && nextOpponent.plannedServePattern
                   ? `Opponent lands a ${nextOpponent.plannedServePattern} serve.`
-                  : 'Opponent gets a legal serve in.'
+                  : 'Opponent gets a legal serve in.')
               }
             } else {
               nextBall = applyShot(nextBall, impact.shot)
@@ -654,7 +670,7 @@ export default function App() {
                 tempoShiftMessage = describeTempoShift(previousSequence, nextSequence, 'opp', nextOpponent.archetype)
                 setTempoBadge(getTempoBadge(nextSequence))
               }
-              nextMessage = openingResolved && nextOpponent.plannedContext !== 'rally'
+              nextMessage = chooseMessage(nextMessage, openingResolved && nextOpponent.plannedContext !== 'rally'
                 ? nextOpponent.plannedContext === 'receive'
                   ? 'Opponent settles the receive and the rally opens.'
                   : 'Opponent lands the first attack and opens the rally.'
@@ -670,7 +686,7 @@ export default function App() {
                       nextOpponent.plannedFamily,
                       nextOpponent.plannedReceivePressure,
                       getStatusRatio(nextOpponent),
-                    )
+                    ))
             }
           } else {
             aiPlanRef.current = null
