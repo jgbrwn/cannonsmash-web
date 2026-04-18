@@ -91,20 +91,20 @@ const getTempoBadge = (sequence: RallySequenceState) => (
 const getArchetypeTone = (archetype: PlayerArchetype) => (
   archetype === 'PenAttack'
     ? {
-        pressure: { shift: 'Pressure takes over — step in and keep it on.', reopen: 'You reopen fast off the softer ball — pressure back on.' },
-        counter: 'Counter exchange settles in — stay ready to jump first.',
-        reset: 'Reset ball buys time — recover now and look to reopen.',
+        pressure: { shift: 'Pressure on — step in and stay on it.', reopen: 'You reopen fast off the softer ball — pressure back on.' },
+        counter: 'Counter trade settles — stay ready to jump.',
+        reset: 'Reset buys time — recover and look to reopen.',
       }
     : archetype === 'PenDrive'
       ? {
           pressure: { shift: 'Rally tightens — drive pressure is building.', reopen: 'You drive back in off the softer ball — pressure back on.' },
-          counter: 'Counter exchange settles in — the drive trade is on.',
-          reset: 'Reset ball buys time — rebuild the rally shape.',
+          counter: 'Counter trade settles — the drive exchange is on.',
+          reset: 'Reset buys time — rebuild the rally shape.',
         }
       : {
-          pressure: { shift: 'Rally tightens — pressure is coming back through spin.', reopen: 'You turn defense into pressure off the softer ball.' },
-          counter: 'Counter exchange settles in — absorb pace and stay balanced.',
-          reset: 'Reset ball buys time — plenty of room to recover shape.',
+          pressure: { shift: 'Rally tightens — spin pressure is building.', reopen: 'You turn defense into pressure off the softer ball.' },
+          counter: 'Counter trade settles — absorb pace and stay balanced.',
+          reset: 'Reset buys time — plenty of room to recover shape.',
         }
 )
 
@@ -125,12 +125,12 @@ const describeTempoShift = (previous: RallySequenceState, next: RallySequenceSta
         ? 'Opponent turns the soft ball into fresh pressure.'
         : archetype === 'PenDrive'
           ? 'Opponent drives back in off the softer ball — pressure back on.'
-          : 'Opponent reopens quickly off the softer ball — pressure back on.'
+          : 'Opponent reopens off the softer ball — pressure back on.'
     }
     return archetype === 'ShakeCut'
-      ? 'Opponent starts winding the rally tighter through spin.'
+      ? 'Opponent starts tightening the rally through spin.'
       : archetype === 'PenDrive'
-        ? 'Opponent starts leaning into a firmer drive exchange.'
+        ? 'Opponent leans into a firmer drive trade.'
         : 'Opponent steps in and turns the pressure up.'
   }
 
@@ -139,7 +139,7 @@ const describeTempoShift = (previous: RallySequenceState, next: RallySequenceSta
       ? 'Opponent settles into a measured trade.'
       : archetype === 'PenDrive'
         ? 'Opponent looks comfortable in the drive trade.'
-        : 'Opponent is happy to trade on the counter.'
+        : 'Opponent is happy to counter-trade.'
   }
 
   return archetype === 'ShakeCut'
@@ -194,7 +194,7 @@ const getMessagePriority = (message: string | null) => {
   if (message.includes('Match to') || message.includes('Game to') || message.includes('Game won') || message.includes('Game lost')) return 6
   if (message.includes('fault') || message.includes('Match over') || message.includes('Reset match')) return 5
   if (message.includes('rally opens') || message.includes('opens up') || message.includes('switch ends')) return 4
-  if (message.includes('pressure back on') || message.includes('Pressure takes over') || message.includes('Rally tightens') || message.includes('Counter exchange settles') || message.includes('Reset ball buys time') || message.includes('Opponent starts') || message.includes('Opponent steps in') || message.includes('Opponent settles into') || message.includes('Opponent drops in') || message.includes('Opponent buys time')) return 3
+  if (message.includes('pressure back on') || message.includes('Pressure on') || message.includes('Rally tightens') || message.includes('Counter trade settles') || message.includes('Reset buys time') || message.includes('Opponent starts') || message.includes('Opponent steps in') || message.includes('Opponent settles into') || message.includes('Opponent drops in') || message.includes('Opponent buys time')) return 3
   if (message.includes('Clean') || message.includes('Late contact') || message.includes('Early contact') || message.includes('guided it back') || message.includes('scrambles') || message.includes('tired return') || message.includes('rushed')) return 2
   return 1
 }
