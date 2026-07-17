@@ -40,7 +40,7 @@ export function attachInput(
     if (len < 0.03 && dt < 300) { onTap(); return }
     if (len < 0.04) return
     const speed = len / (dt / 1000) // screen-heights per second
-    const power = Math.min(1, len * 1.6 + Math.min(0.5, speed * 0.12))
+    const power = Math.min(1, len * 1.05 + Math.min(0.35, speed * 0.09))
     const aimX = Math.max(-1, Math.min(1, (dx / dim) * 3.2))
     // vertical: up (negative dy) = topspin
     const vert = -dy / dim

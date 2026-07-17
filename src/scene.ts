@@ -43,13 +43,19 @@ function makeHumanoid(shirt: number, skin: number): { group: THREE.Group; paddle
   legs.position.y = 0.4
   g.add(legs)
 
-  // paddle arm: a simple paddle mesh we swing around
+  // paddle: blade face points toward the net (+Z in local space, before
+  // group rotation), with the handle angled down toward the wrist like a
+  // shakehand grip. placePlayer adds ready/stroke tilt on top.
   const paddleGroup = new THREE.Group()
-  const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.015, 12), new THREE.MeshLambertMaterial({ color: 0xb03030 }))
-  blade.rotation.z = Math.PI / 2
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.02), new THREE.MeshLambertMaterial({ color: 0x8a6a4a }))
-  handle.position.y = -0.12
-  paddleGroup.add(blade, handle)
+  const blade = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.015, 14), new THREE.MeshLambertMaterial({ color: 0xb03030 }))
+  blade.rotation.x = Math.PI / 2 // face normal along local Z
+  const bladeBack = new THREE.Mesh(new THREE.CircleGeometry(0.085, 14), new THREE.MeshLambertMaterial({ color: 0x1a1a1a }))
+  bladeBack.position.z = -0.009
+  bladeBack.rotation.y = Math.PI
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.11, 0.02), new THREE.MeshLambertMaterial({ color: 0x8a6a4a }))
+  handle.position.set(0, -0.13, 0.01)
+  handle.rotation.x = -0.25 // handle rakes back toward the grip
+  paddleGroup.add(blade, bladeBack, handle)
   const paddle = new THREE.Mesh() // proxy for typing; we return group's blade
   paddleGroup.position.set(0.25, 1.05, 0)
   g.add(paddleGroup)
@@ -222,16 +228,26 @@ function placePlayer(group: THREE.Group, x: number, y: number, swingT: number, h
   group.rotation.y = side > 0 ? 0 : Math.PI
   const paddle = (group as any).__paddle as THREE.Group
   if (!paddle) return
-  const baseX = 0.28 * hand * (side > 0 ? 1 : 1)
+  const baseX = 0.28 * hand
+  // natural grip pose: face turned toward the centerline, slightly closed
+  // (top edge tipped toward the net), forehand more so than backhand.
+  const readyYaw = -0.55 * hand      // turn blade face inward
+  const readyTilt = hand > 0 ? -0.32 : -0.18 // closed face (local -Z is netward)
+  const readyRoll = 0.35 * hand      // wrist roll
   if (swingT > 0) {
     const t = swingT / SWING_TICKS
     // backswing then forward stroke arc
     const phase = t < 0.4 ? -(t / 0.4) : (t - 0.4) / 0.6 * 2 - 1
     paddle.position.set(baseX + phase * -0.18 * hand, 1.0 + Math.sin(t * Math.PI) * 0.18, phase * 0.32)
-    paddle.rotation.y = phase * 0.8 * hand
+    // open on the backswing, close over the ball through contact
+    paddle.rotation.y = readyYaw + phase * 0.9 * hand
+    paddle.rotation.x = readyTilt + phase * -0.35
+    paddle.rotation.z = readyRoll + phase * 0.25 * hand
   } else {
     paddle.position.set(baseX, 1.02, -0.1)
-    paddle.rotation.y = 0
+    paddle.rotation.y = readyYaw
+    paddle.rotation.x = readyTilt
+    paddle.rotation.z = readyRoll
   }
 }
 

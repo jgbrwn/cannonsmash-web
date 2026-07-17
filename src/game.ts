@@ -230,17 +230,23 @@ function strikeBall(g: GameState, p: PlayerG, aimX: number, aimY: number, level:
     b.spin = spin
     b.status = b.status === 6 ? 4 : 5
   } else {
-    targetToV(b.x, b.y, b.z, tx, ty, lv, spin, shotScratch)
-    // error model (original AddError spirit): perturb outgoing velocity based on
-    // contact quality and shot risk (pace + depth). Bad contact => net or long.
-    const risk = 0.35 + lv * 0.65
-    const err = (1 - q) * risk
-    const rx = (Math.random() * 2 - 1) * err
-    const ry = (Math.random() * 2 - 1) * err
-    const rz = (Math.random() * 2 - 1) * err
-    b.vx = shotScratch.vx * (1 + rx * 0.55) + rx * 0.4
+    // error model (original AddError spirit), tuned for touch play:
+    // moderate mishits mostly shorten/soften the ball; only poor contact
+    // (q < ~0.45) meaningfully risks the net or flying long.
+    const mild = 1 - q
+    const safeTy = p.side > 0
+      ? clamp(ty - mild * 0.35, 0.2, TABLE_LENGTH / 2 - 0.05)
+      : clamp(ty + mild * 0.35, -TABLE_LENGTH / 2 + 0.05, -0.2)
+    const safeLv = clamp(lv * (1 - mild * 0.25), 0.25, 1)
+    targetToV(b.x, b.y, b.z, tx, safeTy, safeLv, spin, shotScratch)
+    const hard = Math.max(0, 0.45 - q) / 0.45 // 0..1 only when quality is poor
+    const risk = hard * (0.4 + lv * 0.5)
+    const rx = (Math.random() * 2 - 1) * (mild * 0.2 + risk)
+    const ry = (Math.random() * 2 - 1) * risk
+    const rz = (Math.random() * 2 - 1) * risk
+    b.vx = shotScratch.vx * (1 + rx * 0.5) + rx * 0.35
     b.vy = shotScratch.vy * (1 + ry * 0.5)
-    b.vz = shotScratch.vz * (1 + rz * 0.85) + rz * 0.55
+    b.vz = shotScratch.vz * (1 + rz * 0.8) + rz * 0.5
     b.spin = spin
     if (b.status === 3) b.status = 0
     else if (b.status === 1) b.status = 2
@@ -445,12 +451,12 @@ export function tickGame(g: GameState): void {
         // timing quality: reward swipes made 100-550ms before contact;
         // very early swipes still work but weaker
         const waited = g.tick - p.swipeTick
-        const q = waited < 8 ? 0.55 : waited <= 55 ? 1.0 : Math.max(0.45, 1 - (waited - 55) * 0.012)
+        const q = waited < 3 ? 0.8 : waited <= 70 ? 1.0 : Math.max(0.5, 1 - (waited - 70) * 0.01)
         const reachPenalty = clamp(1 - Math.max(0, Math.abs(dx) - REACH) / 0.4, 0, 1)
         const late = passing && !near ? 0.55 : 1
         const quality = q * (0.55 + reachPenalty * 0.45) * late * (0.75 + you.stamina * 0.25)
         const depth = 0.3 + p.power * (TABLE_LENGTH / 2 - 0.42)
-        const level = 0.4 + p.power * 0.55 + (p.spin > 0.3 ? 0.06 : 0)
+        const level = 0.42 + p.power * 0.48 + (p.spin > 0.3 ? 0.05 : 0)
         const spin = p.spin > 0.25 ? 0.3 + p.spin * 0.4 : p.spin < -0.25 ? -0.25 + p.spin * 0.3 : 0.08
         you.swingT = 1
         you.swingHand = b.x >= you.x ? 1 : -1
@@ -487,8 +493,15 @@ export function tickGame(g: GameState): void {
       cpu.swingT = 1
       cpu.swingHand = b.x >= cpu.x ? -1 : 1
       if (!whiff) {
-        const q = g.difficulty === 0 ? 0.68 + Math.random() * 0.2 : g.difficulty === 1 ? 0.82 + Math.random() * 0.14 : 0.9 + Math.random() * 0.1
-        strikeBall(g, cpu, g.cpuPlan.aimX, g.cpuPlan.aimY, g.cpuPlan.level, g.cpuPlan.spin, q)
+        // CPU unforced errors: sometimes genuinely bad contact that flies long/nets
+        const errRate = g.difficulty === 0 ? 0.3 : g.difficulty === 1 ? 0.14 : 0.05
+        if (Math.random() < errRate) {
+          const q = 0.05 + Math.random() * 0.2
+          strikeBall(g, cpu, g.cpuPlan.aimX, g.cpuPlan.aimY * (1.15 + Math.random() * 0.4), clamp(g.cpuPlan.level * 1.35, 0.3, 1), g.cpuPlan.spin, q)
+        } else {
+          const q = g.difficulty === 0 ? 0.6 + Math.random() * 0.3 : g.difficulty === 1 ? 0.75 + Math.random() * 0.25 : 0.88 + Math.random() * 0.12
+          strikeBall(g, cpu, g.cpuPlan.aimX, g.cpuPlan.aimY, g.cpuPlan.level, g.cpuPlan.spin, q)
+        }
         g.cpuPlan.active = false
       } else {
         // whiffed: keep the plan "active" with an unreachable swing time so the
@@ -517,7 +530,7 @@ export function tickGame(g: GameState): void {
 function stepPlayers(g: GameState): void {
   const spd = 3.4
   movePlayer(g.you, spd)
-  movePlayer(g.cpu, spd * (g.difficulty === 0 ? 0.8 : g.difficulty === 1 ? 0.95 : 1.15))
+  movePlayer(g.cpu, spd * (g.difficulty === 0 ? 0.7 : g.difficulty === 1 ? 0.95 : 1.15))
   if (g.you.swingT > 0) { g.you.swingT++; if (g.you.swingT > SWING_TICKS) g.you.swingT = 0 }
   if (g.cpu.swingT > 0) { g.cpu.swingT++; if (g.cpu.swingT > SWING_TICKS) g.cpu.swingT = 0 }
 }

@@ -104,7 +104,7 @@ function updateAimMarker(): void {
     const len = Math.hypot(dx, dy) / dim
     if (len > 0.02) {
       const aimX = Math.max(-1, Math.min(1, (dx / dim) * 3.2))
-      const power = Math.min(1, len * 1.6)
+      const power = Math.min(1, len * 1.05)
       const depth = 0.3 + power * (2.74 / 2 - 0.42)
       m.position.x = aimX * (1.525 / 2 - 0.12)
       m.position.z = -depth
