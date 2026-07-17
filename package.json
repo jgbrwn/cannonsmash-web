@@ -1,9 +1,20 @@
 {
   "name": "cannonsmash-web",
   "private": true,
-  "workspaces": ["packages/*"],
+  "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "npm run dev -w @csmash/web",
-    "build": "npm run build -w @csmash/web"
+    "dev": "vite --host 0.0.0.0 --port 8000",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 8000",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.179.0",
+    "typescript": "^5.9.2",
+    "vite": "^5.4.10"
   }
 }

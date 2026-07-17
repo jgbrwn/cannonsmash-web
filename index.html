@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0a0e14" />
+    <title>Cannon Smash</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="hud">
+      <div id="scorebar">
+        <div class="score-side" id="score-you">
+          <span class="name">YOU</span>
+          <span class="games" id="games-you">0</span>
+          <span class="pts" id="pts-you">0</span>
+          <span class="serve-dot" id="serve-you">&#9679;</span>
+        </div>
+        <div class="score-side right" id="score-opp">
+          <span class="serve-dot" id="serve-opp">&#9679;</span>
+          <span class="pts" id="pts-opp">0</span>
+          <span class="games" id="games-opp">0</span>
+          <span class="name">CPU</span>
+        </div>
+      </div>
+      <div id="message"></div>
+      <div id="stamina"><div id="stamina-fill"></div></div>
+    </div>
+    <div id="menu" class="overlay">
+      <div class="panel">
+        <h1>CANNON<span>SMASH</span></h1>
+        <p class="tag">table tennis</p>
+        <div class="row" id="difficulty">
+          <button data-d="0">Easy</button>
+          <button data-d="1" class="sel">Normal</button>
+          <button data-d="2">Hard</button>
+        </div>
+        <button id="play" class="big">PLAY</button>
+        <div class="help">
+          <div><b>Swipe</b> to hit &mdash; direction aims, length powers</div>
+          <div><b>Swipe up</b> topspin drive &middot; <b>swipe down</b> backspin push</div>
+          <div><b>Swipe</b> to serve when it's your serve</div>
+        </div>
+        <button id="sound" class="small">Sound: ON</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
