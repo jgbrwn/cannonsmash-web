@@ -1,5 +1,5 @@
 CannonSmash Web
-Copyright (C) 2026  Jeremy Brown <jbssfl@gmail.com>
+Copyright (C) 2026  jgbrwn <jbssfl@gmail.com>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -32,7 +32,7 @@ software and assets:
    C++ code. Game rules, AI behaviour, player archetype concepts,
    and control feel are derived from the original work.
 
-   In April 2026, the original React/three.js prototype was discarded
+   In July 2026, the original React/three.js prototype was discarded
    and the project was fully redesigned and reimplemented by Claude
    (Anthropic's "Fable" model) based on the faithful physics port,
    reverse-engineering notes, the original's known feel, and the
