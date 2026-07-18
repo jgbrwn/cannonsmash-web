@@ -8,6 +8,8 @@ and assisted-control feel, rebuilt around touch.
 
 ![CannonSmash Web screenshot](docs/project/screenshot.png)
 
+![Original CannonSmash screenshot](docs/project/original-screenshot.png)
+
 ## Controls (touch / mouse)
 
 | Gesture | Action |
