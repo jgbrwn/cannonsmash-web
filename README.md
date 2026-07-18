@@ -48,3 +48,11 @@ Deployed as a static build served by busybox httpd via systemd
 
 See [docs/DESIGN.md](docs/DESIGN.md) for architecture, physics notes, tuning
 rationale, and the project plan/history.
+
+## License
+
+This project is licensed under the **GNU General Public License v2**.
+See [LICENSE](LICENSE) for full terms.
+
+See [NOTICE](NOTICE) for attribution of the original CannonSmash game,
+three.js, and other third-party dependencies.

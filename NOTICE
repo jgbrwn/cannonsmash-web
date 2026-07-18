@@ -1,0 +1,65 @@
+CannonSmash Web
+Copyright (C) 2026  Jeremy Brown <jbssfl@gmail.com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along
+with this program; if not, write to the Free Software Foundation, Inc.,
+51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+---
+
+This project is a derivative work based on the following third-party
+software and assets:
+
+
+1. CannonSmash (original game)
+   Copyright (C) 2002-2006  Cannon Smith (cannon.smith@cannonsmash.com)
+   Source: https://cannonsmash.sourceforge.net/
+   License: GNU General Public License v2.0
+
+   CannonSmash Web is a browser-based remake and derivative of the
+   original CannonSmash. The physics engine (ball flight, bounce,
+   shot solver, ball state machine) is a direct port of the original
+   C++ code. Game rules, AI behaviour, player archetype concepts,
+   and control feel are derived from the original work.
+
+   In April 2026, the original React/three.js prototype was discarded
+   and the project was fully redesigned and reimplemented by Claude
+   (Anthropic's "Fable" model) based on the faithful physics port,
+   reverse-engineering notes, the original's known feel, and the
+   designer's specification. The resulting codebase is a complete
+   from-scratch rewrite using vanilla TypeScript + three.js.
+
+
+2. three.js
+   Copyright (C) 2010-2025 Three.js Authors
+   SPDX-License-Identifier: MIT
+   Source: https://github.com/mrdoob/three.js/
+
+   Used for 3D rendering (scene graph, materials, camera, WebGL
+   renderer). Bundled at build time via npm.
+
+
+3. TypeScript
+   Copyright (C) 2012-2025 Microsoft Corporation
+   License: Apache License 2.0
+   Source: https://github.com/microsoft/TypeScript
+
+   Used as the programming language and compiler for this project.
+
+
+4. Vite
+   Copyright (C) 2019-2025 Evan You and Vite contributors
+   SPDX-License-Identifier: MIT
+   Source: https://github.com/vitejs/vite
+
+   Used as the build tool and development server.
