@@ -1,7 +1,7 @@
 import { TICK } from './physics'
-import { GameState, makeGame, startMatch, tickGame, applySwipe } from './game'
+import { GameState, makeGame, startMatch, tickGame, applySwipe, beginDrag, updateDrag, endDrag, quitMatch } from './game'
 import { buildScene, renderFrame, resize, adaptQuality, SceneRefs } from './scene'
-import { attachInput, SwipeTracker } from './input'
+import { attachInput } from './input'
 import {
   initAudio, setSound, soundOn,
   sfxPaddle, sfxBounce, sfxNet, sfxPoint, sfxGame, sfxWin, sfxLose,
@@ -23,8 +23,9 @@ const menu = el('menu')
 const playBtn = el('play')
 const soundBtn = el('sound')
 const diffRow = el('difficulty')
+const quitBtn = el('quit')
 
-let hudCache = { py: -1, pc: -1, gy: -1, gc: -1, server: 0, msg: '', msgShown: false, stam: -1 }
+let hudCache = { py: -1, pc: -1, gy: -1, gc: -1, server: 0, msg: '', msgShown: false, stam: -1, inGame: false }
 
 function updateHUD(): void {
   const c = hudCache
@@ -51,6 +52,11 @@ function updateHUD(): void {
     staminaFill.style.backgroundColor = stam > 0.5 ? '#57d98a' : stam > 0.3 ? '#f6c945' : '#f65945'
     c.stam = stam
   }
+  const inGame = g.phase !== 'menu'
+  if (inGame !== c.inGame) {
+    quitBtn.classList.toggle('show', inGame)
+    c.inGame = inGame
+  }
 }
 
 // ---- menu ----
@@ -72,16 +78,24 @@ soundBtn.addEventListener('click', () => {
 })
 
 // ---- input ----
-const tracker: SwipeTracker = { active: false, startX: 0, startY: 0, curX: 0, curY: 0, startT: 0 }
-attachInput(canvas, (s) => {
-  applySwipe(g, s)
-}, () => {
-  // tap: return to menu after match over
-  if (g.phase === 'matchover') {
-    menu.classList.remove('hidden')
-    g.phase = 'menu'
-  }
-}, tracker)
+attachInput(canvas, {
+  onDragStart() { beginDrag(g) },
+  onDrag(dxNorm) { updateDrag(g, dxNorm) },
+  onDragEnd() { endDrag(g) },
+  onFlick(s) { applySwipe(g, s) },
+  onTap() {
+    if (g.phase === 'matchover') {
+      menu.classList.remove('hidden')
+      g.phase = 'menu'
+    }
+  },
+})
+
+// quit button
+quitBtn.addEventListener('click', () => {
+  quitMatch(g)
+  menu.classList.remove('hidden')
+})
 
 // ---- events -> sfx ----
 function playEvents(bits: number): void {
@@ -94,31 +108,16 @@ function playEvents(bits: number): void {
   else if (bits & 8) sfxPoint()
 }
 
-// ---- live swipe feedback: aim ring shows predicted landing while dragging ----
+// ---- aim feedback: ring shows queued shot's landing target ----
 function updateAimMarker(): void {
   const m = refs.aimMarker
-  if (tracker.active) {
-    const dim = Math.min(window.innerWidth, window.innerHeight)
-    const dx = tracker.curX - tracker.startX
-    const dy = tracker.curY - tracker.startY
-    const len = Math.hypot(dx, dy) / dim
-    if (len > 0.02) {
-      const aimX = Math.max(-1, Math.min(1, (dx / dim) * 3.2))
-      const power = Math.min(1, len * 1.05)
-      const depth = 0.3 + power * (2.74 / 2 - 0.42)
-      m.position.x = aimX * (1.525 / 2 - 0.12)
-      m.position.z = -depth
-      m.visible = true
-      const s = 0.8 + power * 0.8
-      m.scale.set(s, s, s)
-      return
-    }
-  }
   if (g.pending.active) {
     const depth = 0.3 + g.pending.power * (2.74 / 2 - 0.42)
     m.position.x = g.pending.aimX * (1.525 / 2 - 0.12)
     m.position.z = -depth
     m.visible = true
+    const s = 0.8 + g.pending.power * 0.8
+    m.scale.set(s, s, s)
     return
   }
   m.visible = false

@@ -15,6 +15,13 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0e14; t
 .serve-dot { font-size: 9px; color: #57d98a; visibility: hidden; }
 .serve-dot.on { visibility: visible; }
 
+#quit { pointer-events: auto; width: 34px; height: 34px; border-radius: 10px;
+  border: 1px solid rgba(120,180,255,.18); background: rgba(8,12,20,.72);
+  color: #7ea8d8; font-size: 15px; font-weight: 700; line-height: 1;
+  display: none; align-items: center; justify-content: center; }
+#quit.show { display: flex; }
+#quit:active { background: rgba(40,60,90,.9); }
+
 #message { position: absolute; top: calc(max(8px, env(safe-area-inset-top)) + 48px); left: 0; right: 0;
   text-align: center; color: #e8f1ff; font-size: 15px; font-weight: 600;
   text-shadow: 0 1px 4px rgba(0,0,0,.9); opacity: 0; transition: opacity .25s; }

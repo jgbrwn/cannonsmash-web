@@ -61,6 +61,8 @@ export interface GameState {
   tick: number
   difficulty: number       // 0 easy 1 normal 2 hard
   pending: PendingHit      // your queued swipe
+  dragging: boolean        // finger down, manual lateral control
+  manualX: number          // desired paddle x while dragging
   cpuPlan: { swingAt: number; aimX: number; aimY: number; level: number; spin: number; active: boolean }
   contactYou: ContactPrediction
   contactCpu: ContactPrediction
@@ -88,6 +90,8 @@ export function makeGame(): GameState {
     tick: 0,
     difficulty: 1,
     pending: { active: false, aimX: 0, power: 0, spin: 0, quality: 0, swipeTick: 0 },
+    dragging: false,
+    manualX: 0,
     cpuPlan: { swingAt: 0, aimX: 0, aimY: 0, level: 0, spin: 0, active: false },
     contactYou: { x: 0, y: 0, z: 0, ticks: 0, valid: false },
     contactCpu: { x: 0, y: 0, z: 0, ticks: 0, valid: false },
@@ -112,7 +116,7 @@ export function startMatch(g: GameState, difficulty: number): void {
   g.server = 1
   g.youWonMatch = false
   resetRally(g)
-  setMsg(g, 'Your serve — swipe to serve', false, 300)
+  setMsg(g, 'Your serve — flick up to serve', false, 300)
 }
 
 function resetRally(g: GameState): void {
@@ -144,6 +148,33 @@ export function setMsg(g: GameState, text: string, big = false, ticks = 150): vo
 }
 
 // ---------- your input ----------
+
+let dragStartX = 0
+
+// Finger down: start manual lateral control from the current position.
+export function beginDrag(g: GameState): void {
+  g.dragging = true
+  dragStartX = g.you.x
+  g.manualX = g.you.x
+}
+
+// Horizontal drag delta (normalized to min screen dim) moves the paddle.
+// ~45% of a screen width sweeps the full table width.
+export function updateDrag(g: GameState, dxNorm: number): void {
+  if (!g.dragging) return
+  g.manualX = clamp(dragStartX + dxNorm * (TABLE_WIDTH * 2.2), -TABLE_WIDTH / 2 - 0.7, TABLE_WIDTH / 2 + 0.7)
+}
+
+export function endDrag(g: GameState): void {
+  g.dragging = false
+}
+
+// Quit the current match back to the menu.
+export function quitMatch(g: GameState): void {
+  g.phase = 'menu'
+  g.msg = ''
+  g.msgTimer = 0
+}
 
 // Swipe while serving: toss + schedule serve hit.
 // Swipe during rally: queue the hit for next contact.
@@ -361,7 +392,7 @@ export function tickGame(g: GameState): void {
       const wasGameOver = g.phase === 'gameover'
       if (wasGameOver) startNextGame(g)
       else { rotateServe(g); resetRally(g) }
-      if (g.server === 1) setMsg(g, 'Your serve — swipe to serve', false, 200)
+      if (g.server === 1) setMsg(g, 'Your serve — flick up to serve', false, 200)
     }
     // keep animating players back home
     stepPlayers(g)
@@ -422,39 +453,48 @@ export function tickGame(g: GameState): void {
   if (stNow === 0 || stNow === 1 || stNow === 4) predictContact(b, -1, g.contactCpu)
   else g.contactCpu.valid = false
 
-  // ---- your assisted movement: drift toward predicted contact ----
+  // ---- your movement ----
+  // While dragging: full manual lateral control (finger = paddle).
+  // While not dragging: gentle assist drifts toward the predicted contact
+  // (the original had assisted positioning too) at reduced speed — good
+  // CPU placement can out-run the assist, so positioning matters.
   const you = g.you
-  if (g.contactYou.valid) {
-    you.targetX = clamp(g.contactYou.x, -TABLE_WIDTH / 2 - 0.6, TABLE_WIDTH / 2 + 0.6)
-    you.targetY = clamp(g.contactYou.y - 0.35, -TABLE_LENGTH / 2 - 1.9, -0.4)
+  if (g.dragging) {
+    you.targetX = clamp(g.manualX, -TABLE_WIDTH / 2 - 0.7, TABLE_WIDTH / 2 + 0.7)
+  } else if (g.contactYou.valid) {
+    you.targetX = clamp(g.contactYou.x, -TABLE_WIDTH / 2 - 0.7, TABLE_WIDTH / 2 + 0.7)
   } else if (stNow !== 6 && stNow !== 8) {
     you.targetX = you.targetX * 0.995
+  }
+  if (g.contactYou.valid) {
+    you.targetY = clamp(g.contactYou.y - 0.35, -TABLE_LENGTH / 2 - 1.9, -0.4)
+  } else if (stNow !== 6 && stNow !== 8) {
     you.targetY = homeY(1)
   }
 
   // ---- your queued hit resolves at contact ----
+  // Strict proximity: the ball must actually be within paddle reach
+  // (REACH laterally, tight depth window) or the swing whiffs.
   if (g.pending.active && (stNow === 3 || stNow === 2 || stNow === 5)) {
     if (stNow === 3) {
       const dx = b.x - you.x
       const dy = b.y - you.y
-      const near = Math.abs(dy) < 0.42 && Math.abs(dx) < REACH + 0.25 &&
+      const near = Math.abs(dy) < 0.38 && Math.abs(dx) <= REACH &&
         b.z > TABLE_HEIGHT - 0.12 && b.z < TABLE_HEIGHT + 1.05
-      // hit when ball reaches strike depth near the player, or is about to pass
-      const passing = b.y < you.y + 0.05 && b.vy < 0
-      if (passing && Math.abs(dx) > REACH + 0.4) {
-        // ball is out of reach — swing and miss
+      const passing = b.y < you.y - 0.05 && b.vy < 0
+      if (passing) {
+        // ball got past (or was never in reach) — swing and miss
         you.swingT = 1
         you.swingHand = dx >= 0 ? 1 : -1
         g.pending.active = false
-      } else if (near || passing) {
+      } else if (near) {
         const p = g.pending
-        // timing quality: reward swipes made 100-550ms before contact;
-        // very early swipes still work but weaker
+        // timing quality: reward flicks made 0-700ms before contact
         const waited = g.tick - p.swipeTick
         const q = waited < 3 ? 0.8 : waited <= 70 ? 1.0 : Math.max(0.5, 1 - (waited - 70) * 0.01)
-        const reachPenalty = clamp(1 - Math.max(0, Math.abs(dx) - REACH) / 0.4, 0, 1)
-        const late = passing && !near ? 0.55 : 1
-        const quality = q * (0.55 + reachPenalty * 0.45) * late * (0.75 + you.stamina * 0.25)
+        // sweet-spot: dead center of the paddle is best
+        const centering = clamp(1 - Math.abs(dx) / REACH, 0, 1)
+        const quality = q * (0.6 + centering * 0.4) * (0.75 + you.stamina * 0.25)
         const depth = 0.3 + p.power * (TABLE_LENGTH / 2 - 0.42)
         const level = 0.42 + p.power * 0.48 + (p.spin > 0.3 ? 0.05 : 0)
         const spin = p.spin > 0.25 ? 0.3 + p.spin * 0.4 : p.spin < -0.25 ? -0.25 + p.spin * 0.3 : 0.08
@@ -529,7 +569,10 @@ export function tickGame(g: GameState): void {
 
 function stepPlayers(g: GameState): void {
   const spd = 3.4
-  movePlayer(g.you, spd)
+  // Manual drag follows the finger quickly; auto-assist is slower so
+  // positioning is a real skill (assist weakens with difficulty).
+  const assistSpd = g.difficulty === 0 ? 2.8 : g.difficulty === 1 ? 2.3 : 1.8
+  movePlayer(g.you, g.dragging ? 5.2 : assistSpd)
   movePlayer(g.cpu, spd * (g.difficulty === 0 ? 0.7 : g.difficulty === 1 ? 0.95 : 1.15))
   if (g.you.swingT > 0) { g.you.swingT++; if (g.you.swingT > SWING_TICKS) g.you.swingT = 0 }
   if (g.cpu.swingT > 0) { g.cpu.swingT++; if (g.cpu.swingT > SWING_TICKS) g.cpu.swingT = 0 }
