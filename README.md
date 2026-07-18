@@ -43,8 +43,17 @@ npx tsx test/sim.ts     # headless full-match simulation
 npx tsx test/human.ts   # sloppy-human sim across all difficulties
 ```
 
-Deployed as a static build served by busybox httpd via systemd
-(`cannonsmash.service`). After building: `sudo systemctl restart cannonsmash`.
+Deployed as a static build served by **nginx** with gzip compression and
+aggressive caching (immutable cache headers for content-hashed assets,
+short-lived cache for HTML). After building:
+
+```
+npm run build
+sudo systemctl restart cannonsmash   # syncs build to nginx serve dir (rsync)
+```
+
+See `cannonsmash.service` for the deployment process and the nginx config at
+`/etc/nginx/sites-available/cannonsmash` for server tuning.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for architecture, physics notes, tuning
 rationale, and the project plan/history.
