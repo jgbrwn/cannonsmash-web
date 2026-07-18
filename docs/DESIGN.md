@@ -17,7 +17,7 @@ The first prototype (React + three.js, `packages/`) was unplayable and slow:
 - Most of the code generated HUD commentary prose rather than gameplay.
 - The genuinely good part was a faithful port of the original physics.
 
-The rewrite (April 2026) kept the physics and threw away the rest.
+The rewrite (July 2026) kept the physics and threw away the rest.
 
 ## Architecture
 
