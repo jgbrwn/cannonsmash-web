@@ -6,6 +6,8 @@ and assisted-control feel, rebuilt around touch.
 
 **Play:** https://cannonsmash.exe.xyz/
 
+![CannonSmash Web screenshot](docs/project/screenshot.png)
+
 ## Controls (touch / mouse)
 
 | Gesture | Action |
