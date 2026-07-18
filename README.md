@@ -1,8 +1,10 @@
 # CannonSmash Web
 
-A browser-based, mobile-first remake of [CannonSmash](https://cannonsmash.sourceforge.net/)
+A browser-based, mobile-first remake of [Cannon Smash](https://sourceforge.net/projects/cannonsmash/)
 (the classic open-source 3D table tennis game), true to the original's physics
 and assisted-control feel, rebuilt around touch.
+
+archive.org original website link: https://web.archive.org/web/20220130185354/http://cannonsmash.sourceforge.net/
 
 **Play:** https://cannonsmash.exe.xyz/
 
@@ -63,5 +65,5 @@ rationale, and the project plan/history.
 This project is licensed under the **GNU General Public License v2**.
 See [LICENSE](LICENSE) for full terms.
 
-See [NOTICE](NOTICE) for attribution of the original CannonSmash game,
+See [NOTICE](NOTICE) for attribution of the original Cannon Smash game,
 three.js, and other third-party dependencies.
